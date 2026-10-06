@@ -68,7 +68,7 @@ function projectKey(context: Plugin.Context): string {
   return `directory-${createHash("sha256").update(directory).digest("hex")}`
 }
 
-function listOptions(input: Record<string, unknown>): PageOptions {
+function listOptions(input: Record<string, unknown>, activeByDefault = false): PageOptions {
   for (const key of ["includeNotes", "activeOnly"]) {
     if (input[key] !== undefined && typeof input[key] !== "boolean") throw new Error(`${key} must be a boolean`)
   }
@@ -81,7 +81,7 @@ function listOptions(input: Record<string, unknown>): PageOptions {
     ...(category === undefined ? {} : { category }),
     ...(query === undefined ? {} : { query }),
     ...(input.includeNotes === undefined ? {} : { includeNotes: input.includeNotes as boolean }),
-    ...(input.activeOnly === undefined ? {} : { activeOnly: input.activeOnly as boolean }),
+    activeOnly: input.activeOnly === undefined ? activeByDefault : input.activeOnly as boolean,
   }
 }
 
@@ -212,23 +212,23 @@ export default Plugin.define({
     await context.tool.transform((tools) => {
       tools.add({
         name: "session_backlog_list",
-        description: "List tasks in this session's selected backlog (session-isolated or project-shared). Review before work and list doing tasks on resume or after compaction. Scope is chosen by the user. Results are paginated; notes are omitted by default and includeNotes returns previews. Use session_backlog_get for full context.",
+        description: "List selected backlog before work/resume; reuse existing tasks. Completed (done/cancelled) tasks are hidden by default; counts per category still include them. Pass activeOnly:false only when completed tasks are needed. Paginated, notes omitted or previewed. Use get for full notes. Scope chosen by user.",
         input: {
           type: "object",
           properties: {
-            category: { type: "string", minLength: 1 },
+            category: { type: "string", minLength: 1, description: "Only tasks in this category ID." },
             query: { type: "string", minLength: 1 },
             offset: { type: "integer", minimum: 0 },
             limit: { type: "integer", minimum: 1, maximum: LIMITS.page },
             includeNotes: { type: "boolean" },
-            activeOnly: { type: "boolean" },
+            activeOnly: { type: "boolean", description: "Defaults to true: hide done/cancelled tasks. Set false to include completed tasks." },
           },
           additionalProperties: false,
         },
         options: { codemode: false },
         execute: async (input, toolContext) => {
           const scope = await sessionScope(context, toolContext.sessionID)
-          const page = store.list(scope.boardID, listOptions(record(input)))
+          const page = store.list(scope.boardID, listOptions(record(input), true))
           return {
             content: JSON.stringify({ sessionID: toolContext.sessionID, notesArePreviews: record(input).includeNotes === true, ...page }),
           }

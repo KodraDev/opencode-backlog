@@ -174,9 +174,11 @@ manual entries can still omit notes. Existing tasks and storage remain unchanged
 
 Tools use the calling session's selected scope automatically.
 
+`session_backlog_list` hides `done` and `cancelled` tasks by default to keep responses small; each category's `counts` entry still includes them, so completed totals remain visible. Request completed tasks only when needed with `activeOnly: false`. The TUI browser (`/session-tasks`) always lists the full backlog, including completed tasks.
+
 | Tool | Purpose |
 | --- | --- |
-| `session_backlog_list` | List tasks with category/search filters and pagination. |
+| `session_backlog_list` | List tasks with category/search filters and pagination. Hides `done`/`cancelled` by default; per-category counts still include them. Pass `activeOnly: false` to include completed tasks. |
 | `session_backlog_get` | Read one task with full notes. |
 | `session_backlog_add` | Add a task. |
 | `session_backlog_update` | Edit a task title or notes. |
