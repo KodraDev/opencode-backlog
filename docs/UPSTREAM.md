@@ -36,9 +36,7 @@ The server plugin manages tasks and categories. The TUI plugin provides:
 ## Requirements
 
 - OpenCode V2 with the beta plugin API.
-- Node.js 24 and npm, or Nix with flakes enabled.
-
-The Nix development shell supplies Node.js 24 and npm when you use Nix.
+- Node.js 24 and npm.
 
 The plugin currently targets `@opencode-ai/plugin@0.0.0-beta-17927`.
 
@@ -80,51 +78,6 @@ Restart the OpenCode service and reopen the TUI:
 ```sh
 opencode2 service restart
 ```
-
-## Install With Nix
-
-Build the package:
-
-```sh
-nix build github:sachahjkl/opencode-backlog
-realpath result
-```
-
-The result contains two plugin entrypoints:
-
-```text
-result/lib/opencode-backlog/dist/index.js
-result/lib/opencode-backlog/dist/tui.js
-```
-
-Add the server entrypoint to `opencode.jsonc`. Replace `/nix/store/...` with the path printed by `realpath result`.
-
-```jsonc
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugins": [
-    "/nix/store/...-opencode-backlog-0.1.0/lib/opencode-backlog/dist/index.js"
-  ]
-}
-```
-
-Add the TUI entrypoint to `~/.config/opencode/cli.json`:
-
-```json
-{
-  "plugins": [
-    "/nix/store/...-opencode-backlog-0.1.0/lib/opencode-backlog/dist/tui.js"
-  ]
-}
-```
-
-Restart the OpenCode service after the first installation:
-
-```sh
-opencode2 service restart
-```
-
-Reopen the TUI to load the TUI plugin.
 
 ## Use The Backlog
 
@@ -231,17 +184,13 @@ Open the command palette in the TUI. The `Browse backlog` command confirms that 
 
 ## Development
 
-Run all development commands through Nix:
+Run the development commands directly:
 
 ```sh
-nix develop
-nix develop -c pre-commit run --all-files
-nix develop -c npm run check
-nix develop -c npm test
-nix flake check --print-build-logs
+npm run build
+npm run check
+npm test
 ```
-
-Entering `nix develop` installs the repository pre-commit hook. The hook checks Nix formatting, GitHub Actions, JSON, merge conflicts, file sizes, and whitespace.
 
 `BACKLOG.json` is not required by the test suite.
 
