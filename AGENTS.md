@@ -22,8 +22,8 @@ in the UI. Capture scope and revision before interactive operations.
 
 ## Verification
 
-- Production-only typecheck: `npm run typecheck:src`.
-- Build: `npm run build`.
+- Production-only typecheck: `pnpm run typecheck:src`.
+- Build: `pnpm run build`.
 - Whitespace check: `git diff --check`.
 - Do not run or modify tests without explicit user authorization. Upstream test
   files and testing configuration describe the original plugin and are preserved.

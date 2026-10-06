@@ -12,7 +12,7 @@ function build() {
   building = true
   console.log("Building local Backlog. OpenCode reloads changed local modules.")
   // Fixed command; no filenames or user input are interpolated into the shell.
-  const child = spawn("npm run build", { cwd: root, shell: true, stdio: "inherit" })
+  const child = spawn("pnpm run build", { cwd: root, shell: true, stdio: "inherit" })
   child.on("error", (error) => { console.error(error); process.exit(1) })
   child.on("exit", (code) => {
     building = false

@@ -1,8 +1,9 @@
 {
   "name": "kodradev-opencode-backlog",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "SQLite-backed hybrid project/session backlog tools and sidebar for OpenCode 2",
   "type": "module",
+  "packageManager": "pnpm@11.9.0",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
@@ -34,7 +35,7 @@
     "dev": "node script/dev.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "typecheck:src": "tsc -p tsconfig.build.json --noEmit",
-    "prepack": "npm run build",
+    "prepack": "pnpm run build",
     "test": "npm run build && tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js"
   },
   "keywords": [
@@ -44,10 +45,6 @@
     "kanban"
   ],
   "license": "MIT",
-  "overrides": {
-    "seroval": "1.6.8",
-    "brace-expansion@2": "2.1.7"
-  },
   "dependencies": {
     "@opencode/client": "2.0.23",
     "@opencode/plugin": "2.0.23",

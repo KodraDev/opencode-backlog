@@ -24,7 +24,7 @@ Switch scope with `/backlog-scope`. Switching selects another backlog; it never 
 ## Requirements
 
 - OpenCode V2; this fork targets `2.0.23`.
-- Node.js 24+ and npm for local development.
+- Node.js 24+ and pnpm 11.9.0 for local development.
 
 This is an early development version, not yet production-verified.
 
@@ -265,13 +265,13 @@ Retention reduces accumulated finished session history, **not total disk usage t
 ## Development
 
 ```sh
-npm ci --ignore-scripts
-npm run typecheck:src
-npm run build
-npm run dev
+pnpm install --frozen-lockfile --ignore-scripts
+pnpm run typecheck:src
+pnpm run build
+pnpm run dev
 ```
 
-The repository-local plugin loads `dist/`; `npm run dev` rebuilds when `src/` or `skills/` changes. Other projects keep using the globally configured npm package.
+The repository-local plugin loads `dist/`; `pnpm run dev` rebuilds when `src/` or `skills/` changes. Other projects keep using the globally configured npm package.
 
 The local development wrapper always uses `.opencode/backlog-dev.sqlite` inside this checkout, including its own tasks, scope preferences, settings, and schema migrations. SQLite files are ignored by Git. The global npm plugin keeps using the production database described under [Storage](#storage). Switching to development does not copy or move existing production tasks; the development backlog starts empty.
 
