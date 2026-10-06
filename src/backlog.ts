@@ -14,7 +14,7 @@ export interface Category {
 }
 
 export const CATEGORY_PRESETS: Readonly<Record<string, { color: CategoryColor; icon: CategoryIcon }>> = {
-  todo: { color: "subdued", icon: "circle" },
+  todo: { color: "info", icon: "circle" },
   doing: { color: "warning", icon: "dot" },
   blocked: { color: "error", icon: "cross" },
   review: { color: "info", icon: "diamond" },
@@ -41,6 +41,7 @@ export interface Backlog {
 export const DEFAULT_CATEGORIES: readonly Category[] = [
   { id: "todo", title: "Todo", ...CATEGORY_PRESETS.todo },
   { id: "doing", title: "Doing", ...CATEGORY_PRESETS.doing },
+  { id: "blocked", title: "Blocked", ...CATEGORY_PRESETS.blocked },
   { id: "done", title: "Done", ...CATEGORY_PRESETS.done },
 ]
 

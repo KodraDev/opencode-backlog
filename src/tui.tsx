@@ -1,15 +1,11 @@
 import { randomUUID } from "node:crypto"
-import { watch } from "node:fs"
-import { join } from "node:path"
-import { Plugin } from "@opencode-ai/plugin/tui"
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
+import { Plugin } from "@opencode/plugin/tui"
+import { createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import {
   addCategory,
-  BACKLOG_FILE,
   CATEGORY_COLORS,
   CATEGORY_ICONS,
   CATEGORY_PRESETS,
-  EMPTY_BACKLOG,
   moveItem,
   moveCategory,
   purgeCategory,
@@ -24,11 +20,16 @@ import {
   type CategoryIcon,
   type Status,
 } from "./backlog.js"
-import { readBacklog, readBacklogSync, updateBacklog } from "./store.js"
+import { listBacklog, listSessions, readBacklog, sessionAccess, updateBacklog, type BacklogAccess } from "./ui-client.js"
+import { SessionBacklog } from "./session-rpc.js"
+import type { BacklogPage } from "./session-store.js"
 
-interface BacklogSnapshot {
-  backlog: Backlog
-  error?: string
+const pinned = new WeakMap<Plugin.Context, BacklogAccess>()
+
+function pinContext(context: Plugin.Context, access: BacklogAccess): Plugin.Context {
+  const copy = { ...context }
+  pinned.set(copy, access)
+  return copy
 }
 
 type BrowseAction = "details" | "status" | "edit" | "delete"
@@ -39,6 +40,13 @@ function categoryTitle(categories: readonly Category[], status: Status): string 
 
 function categoryColorName(category: Category): CategoryColor {
   return category.color ?? CATEGORY_PRESETS[category.id]?.color ?? "info"
+}
+
+function categoryColor(context: Plugin.Context, category: Category) {
+  const name = categoryColorName(category)
+  if (name === "default") return context.theme.text.default
+  if (name === "subdued") return context.theme.text.subdued
+  return context.theme.text.feedback[name].default
 }
 
 function categoryIconName(category: Category): CategoryIcon {
@@ -56,60 +64,68 @@ function categoryIcon(category: Category): string {
   return ""
 }
 
-function readSnapshot(directory: string): BacklogSnapshot {
-  try {
-    return { backlog: readBacklogSync(join(directory, BACKLOG_FILE)) }
-  } catch (cause) {
-    return {
-      backlog: EMPTY_BACKLOG,
-      error: cause instanceof Error ? cause.message : String(cause),
+function BacklogView(props: { context: Plugin.Context; sessionID: string }) {
+  const theme = props.context.theme
+  const client = props.context.client.rpc(SessionBacklog)
+  const controller = new AbortController()
+  const [snapshot, { refetch }] = createResource(() => props.sessionID, async (sessionID): Promise<{ page?: BacklogPage; error?: string }> => {
+    try {
+      return { page: await listBacklog(sessionAccess(props.context, sessionID), { activeOnly: true, limit: 8 }, controller.signal) }
+    } catch (cause) {
+      return { error: cause instanceof Error ? cause.message : String(cause) }
+    }
+  })
+  const page = () => snapshot()?.page
+  const unsubscribe = client.events.on("updated", (event) => {
+    if (event.data.sessionID === props.sessionID || event.data.boardID === snapshot.latest?.page?.boardID) void refetch()
+  }, { signal: controller.signal })
+  const timer = setInterval(() => { void refetch() }, 15_000)
+  onCleanup(() => { clearInterval(timer); controller.abort(); unsubscribe() })
+  const error = () => snapshot()?.error
+  const open = async (item: BacklogItem) => {
+    try {
+      const access = sessionAccess(props.context, props.sessionID)
+      const backlog = await readBacklog(access)
+      const current = backlog.items.find((candidate) => candidate.id === item.id)
+      if (!current) throw new Error("This task no longer exists")
+      showTaskDetails(pinContext(props.context, access), current, backlog.categories)
+    } catch (cause) {
+      props.context.ui.toast.show({ message: cause instanceof Error ? cause.message : String(cause), variant: "error" })
     }
   }
-}
-
-function BacklogView(props: { context: Plugin.Context; directory: string }) {
-  const theme = props.context.theme
-  const [snapshot, setSnapshot] = createSignal(readSnapshot(props.directory))
-  const backlog = createMemo(() => snapshot().backlog)
-  const error = createMemo(() => snapshot().error)
-  let refresh: ReturnType<typeof setTimeout> | undefined
-
-  const watcher = watch(props.directory, { persistent: false }, () => {
-    clearTimeout(refresh)
-    refresh = setTimeout(() => {
-      setSnapshot(readSnapshot(props.directory))
-    }, 50)
-  })
-
-  onCleanup(() => {
-    clearTimeout(refresh)
-    watcher.close()
-  })
+  const perform = async (operation: (context: Plugin.Context) => Promise<void>) => {
+    try {
+      await operation(pinContext(props.context, sessionAccess(props.context, props.sessionID)))
+    } catch (cause) {
+      props.context.ui.toast.show({ message: cause instanceof Error ? cause.message : String(cause), variant: "error" })
+    }
+  }
 
   return (
     <box>
       <text fg={theme.text.default}>
-        <b>Backlog</b>
+        <b>{page()?.mode === "project" ? "Project backlog" : "Session TODO"}</b>
       </text>
+      <Show when={page()}>
+        <text fg={theme.text.feedback.info.default} onMouseUp={() => perform(chooseScope)}>
+          {page()?.mode === "project" ? "Shared project" : "Only this session"} · change scope
+        </text>
+      </Show>
+      <Show when={snapshot.loading && !page()}><text fg={theme.text.subdued}>Loading tasks…</text></Show>
       <Show when={error()}>
         {(message) => <text fg={theme.text.feedback.error.default}>{message()}</text>}
       </Show>
-      <Show when={!error() && backlog().items.length === 0}>
-        <text fg={theme.text.subdued}>No tasks</text>
+      <Show when={!error() && page()?.total === 0}>
+        <text fg={theme.text.subdued}>No pending tasks</text>
       </Show>
-      <For each={backlog().categories}>
+      <For each={page()?.categories.filter((category) => page()?.items.some((item) => item.status === category.id)) ?? []}>
         {(category) => {
-          const items = createMemo(() => backlog().items.filter((item) => item.status === category.id))
-          const color = () => {
-            const name = categoryColorName(category)
-            if (name === "default") return theme.text.default
-            if (name === "subdued") return theme.text.subdued
-            return theme.text.feedback[name].default
-          }
+          const items = createMemo(() => page()?.items.filter((item) => item.status === category.id) ?? [])
+          const color = () => categoryColor(props.context, category)
           return (
             <box marginTop={1}>
               <text fg={color()}>
-                <b>{category.title}</b> ({items().length})
+                <b>{category.title}</b> ({page()?.counts[category.id] ?? 0})
               </text>
               <For each={items()}>
                 {(item) => (
@@ -117,12 +133,12 @@ function BacklogView(props: { context: Plugin.Context; directory: string }) {
                     flexDirection="row"
                     gap={1}
                     minWidth={0}
-                    onMouseUp={() => void showTaskDetails(props.context, item, backlog().categories)}
+                    onMouseUp={() => open(item)}
                   >
                     <Show when={categoryIcon(category)}>
                       {(icon) => <text fg={color()} flexShrink={0}>{icon()}</text>}
                     </Show>
-                    <text fg={theme.text.default} wrapMode="none" truncate flexGrow={1} minWidth={0}>
+                    <text fg={categoryColorName(category) === "subdued" ? theme.text.default : color()} wrapMode="none" truncate flexGrow={1} minWidth={0}>
                       {item.title}
                     </text>
                   </box>
@@ -132,6 +148,19 @@ function BacklogView(props: { context: Plugin.Context; directory: string }) {
           )
         }}
       </For>
+      <Show when={(page()?.total ?? 0) > 8}>
+        <text fg={theme.text.feedback.info.default} onMouseUp={() => perform(browseBacklog)}>
+          +{(page()?.total ?? 0) - 8} pending · /session-tasks
+        </text>
+      </Show>
+      <Show when={(page()?.counts.done ?? 0) > 0}>
+        <text
+          fg={categoryColor(props.context, page()?.categories.find(({ id }) => id === "done") ?? { id: "done", title: "Done" })}
+          onMouseUp={() => perform(browseBacklog)}
+        >
+          ✓ {page()?.counts.done} completed · /session-tasks
+        </text>
+      </Show>
     </box>
   )
 }
@@ -149,7 +178,7 @@ function TaskAction(props: {
 }) {
   return (
     <text
-      fg={props.danger ? props.context.theme.text.feedback.error.default : props.context.theme.text.subdued}
+      fg={props.danger ? props.context.theme.text.feedback.error.default : props.context.theme.text.feedback.info.default}
       onMouseUp={props.run}
     >
       <b>{props.shortcut}</b> {props.label}
@@ -158,6 +187,7 @@ function TaskAction(props: {
 }
 
 function TaskDetailsDialog(props: { context: Plugin.Context; item: BacklogItem; categories: readonly Category[] }) {
+  const category = () => props.categories.find(({ id }) => id === props.item.status) ?? { id: props.item.status, title: props.item.status }
   const run = (operation: () => Promise<void>) => {
     props.context.ui.dialog.clear()
     void operation().catch((cause) =>
@@ -192,8 +222,14 @@ function TaskDetailsDialog(props: { context: Plugin.Context; item: BacklogItem; 
           esc
         </text>
       </box>
+      <text fg={categoryColor(props.context, category())}>
+        {categoryIcon(category())} <b>{category().title}</b>
+      </text>
       <text fg={props.context.theme.text.subdued} wrapMode="word">
-        {taskDetails(props.item, props.categories)}
+        ID: {props.item.id}
+      </text>
+      <text fg={props.context.theme.text.default} wrapMode="word">
+        {props.item.notes ?? "No notes"}
       </text>
       <box flexDirection="row" justifyContent="flex-end" gap={2} paddingBottom={1}>
         <TaskAction context={props.context} shortcut="c" label="status" run={changeStatus} />
@@ -212,11 +248,13 @@ async function browseBacklog(context: Plugin.Context): Promise<void> {
   return browseBacklogWithState(context, () => {})
 }
 
-function backlogLocation(context: Plugin.Context): { directory: string; path: string } {
+function backlogLocation(context: Plugin.Context): { directory: string; path: BacklogAccess } {
+  const captured = pinned.get(context)
+  if (captured) return { directory: captured.directory, path: captured }
   const route = context.ui.router.current()
-  const location = route.type === "session" ? context.data.session.get(route.sessionID)?.location : context.location
-  const directory = location?.directory ?? context.data.location.default().directory
-  return { directory, path: join(directory, BACKLOG_FILE) }
+  if (route.type !== "session") throw new Error("Open a session before using its TODO list")
+  const path = sessionAccess(context, route.sessionID)
+  return { directory: path.directory, path }
 }
 
 async function addBacklogItem(context: Plugin.Context): Promise<void> {
@@ -322,7 +360,7 @@ async function removeBacklogItem(context: Plugin.Context, item: BacklogItem): Pr
   context.ui.toast.show({ message: `Deleted "${item.title}".`, variant: "success" })
 }
 
-async function purgeConfirmedCategory(path: string, status: Status, confirmedIDs: readonly string[]): Promise<void> {
+async function purgeConfirmedCategory(path: BacklogAccess, status: Status, confirmedIDs: readonly string[]): Promise<void> {
   await updateBacklog(path, (current) => {
     const currentIDs = current.items.filter((item) => item.status === status).map((item) => item.id)
     const changed = currentIDs.length !== confirmedIDs.length || currentIDs.some((id) => !confirmedIDs.includes(id))
@@ -544,74 +582,115 @@ async function manageBacklogCategories(context: Plugin.Context): Promise<void> {
 }
 
 async function moveBacklogItem(context: Plugin.Context): Promise<void> {
-  const { path } = backlogLocation(context)
-  const backlog = await readBacklog(path)
-
-  if (backlog.items.length === 0) {
-    await context.ui.dialog.alert({ title: "Backlog", message: "No tasks" })
-    return
-  }
-
-  const id = await context.ui.dialog.select({
-    title: "Move backlog task",
-    placeholder: "Select a task to move",
-    options: backlog.items.map((item) => ({
-      title: item.title,
-      value: item.id,
-      ...(item.notes === undefined ? {} : { description: item.notes }),
-      category: categoryTitle(backlog.categories, item.status),
-    })),
-  })
-  if (!id) return
-
-  const item = backlog.items.find((candidate) => candidate.id === id)
-  if (!item) return
-  await changeTaskStatus(context, item)
+  return browseBacklogWithState(context, () => {}, () => "status")
 }
 
 async function browseBacklogWithState(
   context: Plugin.Context,
   setOpen: (open: boolean) => void,
   action: () => BrowseAction = () => "details",
+  readonly = false,
 ): Promise<void> {
   const { path } = backlogLocation(context)
-  const backlog = await readBacklog(path)
-
-  if (backlog.items.length === 0) {
-    await context.ui.dialog.alert({ title: "Backlog", message: "No tasks" })
+  const captured = pinContext(context, path)
+  let offset = 0
+  const next = `next:${randomUUID()}`
+  const previous = `previous:${randomUUID()}`
+  while (true) {
+    const page = await listBacklog(path, { offset, limit: 20 })
+    if (page.total === 0) {
+      await context.ui.dialog.alert({ title: "Session TODO", message: "No tasks" })
+      return
+    }
+    if (offset >= page.total) { offset = Math.floor((page.total - 1) / 20) * 20; continue }
+    setOpen(!readonly)
+    const id = await context.ui.dialog.select({
+      title: `${readonly ? "Backlog history" : page.mode === "project" ? "Project backlog" : "Session TODO"} · ${offset + 1}–${offset + page.items.length} of ${page.total}`,
+      placeholder: "Select a task",
+      options: [
+        ...page.items.map((item) => ({ title: item.title, value: item.id, category: categoryTitle(page.categories, item.status) })),
+        ...(offset > 0 ? [{ title: "Previous page", value: previous }] : []),
+        ...(offset + page.items.length < page.total ? [{ title: "Next page", value: next }] : []),
+      ],
+    }).finally(() => setOpen(false))
+    if (!id) return
+    if (id === next) { offset += 20; continue }
+    if (id === previous) { offset = Math.max(0, offset - 20); continue }
+    const backlog = await readBacklog(path)
+    const item = backlog.items.find((candidate) => candidate.id === id)
+    if (!item) throw new Error("This task no longer exists. Refresh the list.")
+    if (readonly) {
+      await context.ui.dialog.alert({ title: item.title, message: taskDetails(item, backlog.categories) })
+      continue
+    }
+    const selectedAction = action()
+    if (selectedAction === "status") return changeTaskStatus(captured, item)
+    if (selectedAction === "edit") return editBacklogItem(captured, item)
+    if (selectedAction === "delete") return removeBacklogItem(captured, item)
+    showTaskDetails(captured, item, backlog.categories)
     return
   }
+}
 
-  setOpen(true)
-  const id = await context.ui.dialog
-    .select({
-      title: "Backlog",
-      placeholder: "Select a task",
-      options: backlog.items.map((item) => ({
-        title: item.title,
-        value: item.id,
-        ...(item.notes === undefined ? {} : { description: item.notes }),
-        category: categoryTitle(backlog.categories, item.status),
-      })),
+async function browseSessions(context: Plugin.Context): Promise<void> {
+  const { path } = backlogLocation(context)
+  let offset = 0
+  const next = `next:${randomUUID()}`
+  const previous = `previous:${randomUUID()}`
+  while (true) {
+    const page = await listSessions(path, offset)
+    if (page.total === 0) {
+      await context.ui.dialog.alert({ title: "Stored backlogs", message: "No stored backlogs in this project" })
+      return
+    }
+    const id = await context.ui.dialog.select({
+      title: "Stored backlogs · read-only history",
+      options: [
+        ...page.items.map((session) => ({
+          title: session.title, value: session.boardID,
+          description: `${session.mode} · ${session.tasks} tasks · ${new Date(session.updatedAt).toLocaleDateString()}`,
+        })),
+        ...(offset > 0 ? [{ title: "Previous page", value: previous }] : []),
+        ...(offset + page.items.length < page.total ? [{ title: "Next page", value: next }] : []),
+      ],
     })
-    .finally(() => setOpen(false))
-  if (!id) return
+    if (!id) return
+    if (id === next) { offset += 20; continue }
+    if (id === previous) { offset = Math.max(0, offset - 20); continue }
+    const session = page.items.find((candidate) => candidate.boardID === id)
+    if (!session) return
+    const access = sessionAccess(context, path.sessionID, path.directory)
+    access.historyBoardID = session.boardID
+    await browseBacklogWithState(pinContext(context, access), () => {}, () => "details", true)
+  }
+}
 
-  const item = backlog.items.find((candidate) => candidate.id === id)
-  if (!item) return
-  const selectedAction = action()
-  if (selectedAction === "status") return changeTaskStatus(context, item)
-  if (selectedAction === "edit") return editBacklogItem(context, item)
-  if (selectedAction === "delete") return removeBacklogItem(context, item)
-  showTaskDetails(context, item, backlog.categories)
+async function chooseScope(context: Plugin.Context): Promise<void> {
+  const { path } = backlogLocation(context)
+  const page = await listBacklog(path, { limit: 1 })
+  const choice = await context.ui.dialog.select({
+    title: "Backlog scope for this session",
+    current: page.mode,
+    options: [
+      { title: "Session TODO", value: "session", description: "An isolated list for this session" },
+      { title: "Project backlog", value: "project", description: "Shared with sessions in this project" },
+      { title: "Use configured default", value: "default", description: "Remove this session's override" },
+    ],
+  })
+  if (!choice) return
+  const result = await path.client.setMode({ sessionID: path.sessionID, mode: choice }, { location: { directory: path.directory } }) as { mode: string }
+  context.ui.toast.show({ message: `Using ${result.mode} backlog. Existing tasks were not moved.`, variant: "success" })
 }
 
 function Commands(props: { context: Plugin.Context }) {
   const [browseOpen, setBrowseOpen] = createSignal(false)
   const [browseAction, setBrowseAction] = createSignal<BrowseAction>("details")
-  const run = async (operation: () => Promise<void>) => {
+  const [browseContext, setBrowseContext] = createSignal<Plugin.Context>()
+  const run = async (operation: (context: Plugin.Context) => Promise<void>, source = props.context) => {
     try {
-      await operation()
+      const { path } = backlogLocation(source)
+      await readBacklog(path)
+      await operation(pinContext(source, path))
     } catch (cause) {
       props.context.ui.toast.show({
         message: cause instanceof Error ? cause.message : String(cause),
@@ -624,52 +703,72 @@ function Commands(props: { context: Plugin.Context }) {
     mode: "global",
     commands: [
       {
-        id: "backlog.browse",
-        title: "Browse backlog",
+        id: "kodradev.backlog.browse",
+        title: "Browse selected backlog",
         description: "View backlog tasks and change their category",
         group: "Backlog",
         palette: true,
-        slash: { name: "backlog", aliases: ["tasks"] },
+        slash: { name: "session-tasks" },
         run: () => {
           setBrowseAction("details")
-          return run(() => browseBacklogWithState(props.context, setBrowseOpen, browseAction))
+          return run((context) => {
+            setBrowseContext(context)
+            return browseBacklogWithState(context, setBrowseOpen, browseAction)
+          })
         },
       },
       {
-        id: "backlog.add",
+        id: "kodradev.backlog.add",
         title: "Add backlog task",
         description: "Create a task at the top of the first category",
         group: "Backlog",
         palette: true,
-        slash: { name: "backlog-add", aliases: ["task-add"] },
-        run: () => run(() => addBacklogItem(props.context)),
+        slash: { name: "session-task-add" },
+        run: () => run(addBacklogItem),
       },
       {
-        id: "backlog.move",
+        id: "kodradev.backlog.move",
         title: "Move backlog task",
         description: "Change a backlog task category",
         group: "Backlog",
         palette: true,
-        slash: { name: "backlog-move", aliases: ["task-move"] },
-        run: () => run(() => moveBacklogItem(props.context)),
+        slash: { name: "session-task-move" },
+        run: () => run(moveBacklogItem),
       },
       {
-        id: "backlog.purge",
+        id: "kodradev.backlog.purge",
         title: "Purge backlog category",
         description: "Permanently delete every task in a category",
         group: "Backlog",
         palette: true,
-        slash: { name: "backlog-purge" },
-        run: () => run(() => purgeBacklogCategory(props.context)),
+        slash: { name: "session-backlog-purge" },
+        run: () => run(purgeBacklogCategory),
       },
       {
-        id: "backlog.categories",
+        id: "kodradev.backlog.categories",
         title: "Manage backlog categories",
         description: "Add, rename, move, purge, or delete a category",
         group: "Backlog",
         palette: true,
-        slash: { name: "backlog-categories" },
-        run: () => run(() => manageBacklogCategories(props.context)),
+        slash: { name: "session-backlog-categories" },
+        run: () => run(manageBacklogCategories),
+      },
+      {
+        id: "kodradev.backlog.sessions",
+        title: "Browse stored backlogs",
+        description: "Read-only history for this project",
+        group: "Backlog",
+        palette: true,
+        slash: { name: "session-backlogs" },
+        run: () => run(browseSessions),
+      },
+      {
+        id: "kodradev.backlog.scope",
+        title: "Choose backlog scope for this session",
+        group: "Backlog",
+        palette: true,
+        slash: { name: "backlog-scope" },
+        run: () => run(chooseScope),
       },
     ],
   }))
@@ -684,7 +783,7 @@ function Commands(props: { context: Plugin.Context }) {
         group: "Backlog",
         run() {
           setBrowseOpen(false)
-          return run(() => addBacklogItem(props.context))
+          return run(addBacklogItem, browseContext() ?? props.context)
         },
       },
       {
@@ -693,7 +792,7 @@ function Commands(props: { context: Plugin.Context }) {
         group: "Backlog",
         run() {
           setBrowseOpen(false)
-          return run(() => purgeBacklogCategory(props.context))
+          return run(purgeBacklogCategory, browseContext() ?? props.context)
         },
       },
       {
@@ -729,7 +828,7 @@ function Commands(props: { context: Plugin.Context }) {
 }
 
 export default Plugin.define({
-  id: "opencode.backlog.tui",
+  id: "kodradev.backlog.tui",
   setup(context) {
     const releaseCommands = context.ui.slot({
       append: "app",
@@ -741,7 +840,7 @@ export default Plugin.define({
       render: (props) => {
         const directory = context.data.session.get(props.sessionID)?.location.directory
         if (!directory) return null
-        return <BacklogView context={context} directory={directory} />
+        return <BacklogView context={context} sessionID={props.sessionID} />
       },
     })
 

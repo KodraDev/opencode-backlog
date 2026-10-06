@@ -1,266 +1,178 @@
-# opencode-backlog
+# KodraDev OpenCode Backlog
 
-A persistent project backlog for OpenCode V2 agents and the TUI.
+Hybrid SQLite-backed fork of [sachahjkl/opencode-backlog](https://github.com/sachahjkl/opencode-backlog).
+Repository: [KodraDev/opencode-backlog](https://github.com/KodraDev/opencode-backlog).
+Package: `kodradev-opencode-backlog`. See [NOTICE.md](NOTICE.md) and the preserved MIT [LICENSE](LICENSE).
 
-`opencode-backlog` gives the agent tools to manage project tasks. It also adds an interactive backlog to the OpenCode sidebar and command palette.
+The upstream categories, ordering, task dialogs, keyboard actions, and sidebar
+are retained. Storage and scope resolution are different:
 
-Published package: [opencode-backlog on npm](https://www.npmjs.com/package/opencode-backlog).
+- **Session mode:** each OpenCode session has an independent TODO list.
+- **Project mode:** sessions in the same project use a shared backlog.
+- A configurable default applies when a session has no saved override.
+- The user can override the mode for one session using `/backlog-scope`.
+- Switching modes selects another backlog. It never moves or merges tasks.
+- Subagents are independent sessions by default; they do not inherit a parent's
+  override. With a project default, they share the project's backlog.
 
-![Backlog sidebar in OpenCode](docs/images/opencode-backlog.jpg)
+## Status
 
-## What It Does
+This is an initial development version, not a production-verified plugin.
+The package is not published to npm. The original installed plugin is not replaced automatically.
+The fork targets OpenCode `2.0.23` and its native V2 plugin API.
 
-The plugin stores tasks and ordered categories in `BACKLOG.json` at the project root.
-
-New backlogs contain these categories:
-
-- `todo`
-- `doing`
-- `done`
-
-You can add, rename, style, reorder, purge, and remove categories. Each category has a stable ID and a modifiable title.
-
-The server plugin manages tasks and categories. The TUI plugin provides:
-
-- A live backlog summary below the sidebar context.
-- A `Browse backlog` command in the command palette.
-- `/backlog` and `/tasks` slash commands.
-- Task details and category changes from the TUI.
-- `/backlog-purge` to remove every task from a selected category.
-- `/backlog-categories` to manage categories.
-
-## Requirements
-
-- OpenCode V2 with the beta plugin API.
-- Node.js 24 and npm, or Nix with flakes enabled.
-
-The Nix development shell supplies Node.js 24 and npm when you use Nix.
-
-The plugin currently targets `@opencode-ai/plugin@0.0.0-beta-17927`.
-
-## Install With Node.js
-
-Clone the repository and build the plugin:
+## Build
 
 ```sh
-git clone https://github.com/sachahjkl/opencode-backlog.git
-cd opencode-backlog
-npm ci
+npm ci --ignore-scripts
+npm run typecheck:src
 npm run build
-pwd
 ```
 
-Add the server entrypoint to `opencode.jsonc`. Replace `/absolute/path/to/opencode-backlog` with the path printed by `pwd`.
+These commands compile production sources only; they do not run tests.
+Node.js 24+ is needed for development. The server uses OpenCode's Bun runtime
+and its built-in `bun:sqlite` driver; no native SQLite addon is installed.
+
+The lockfile pins patched Seroval and brace-expansion resolutions. The last npm
+production dependency audit still reported three low-severity advisories and no
+high/critical advisories. This is not a security audit of the plugin or its host.
+
+Upstream test files and testing configuration are preserved unchanged. They
+still describe the original plugin and need an explicitly authorized update
+before they can validate this fork. Do not treat the upstream suite as proof
+that the new SQLite or hybrid behavior works.
+
+## Enable when ready
+
+Add the local package directory to the global OpenCode configuration. Preserve
+other plugin entries. On Windows, forward slashes work in JSON paths:
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
-    "/absolute/path/to/opencode-backlog/dist/index.js"
-  ]
-}
-```
-
-Add the TUI entrypoint to `~/.config/opencode/cli.json`:
-
-```json
-{
-  "plugins": [
-    "/absolute/path/to/opencode-backlog/dist/tui.js"
-  ]
-}
-```
-
-Restart the OpenCode service and reopen the TUI:
-
-```sh
-opencode2 service restart
-```
-
-## Install With Nix
-
-Build the package:
-
-```sh
-nix build github:sachahjkl/opencode-backlog
-realpath result
-```
-
-The result contains two plugin entrypoints:
-
-```text
-result/lib/opencode-backlog/dist/index.js
-result/lib/opencode-backlog/dist/tui.js
-```
-
-Add the server entrypoint to `opencode.jsonc`. Replace `/nix/store/...` with the path printed by `realpath result`.
-
-```jsonc
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugins": [
-    "/nix/store/...-opencode-backlog-0.1.0/lib/opencode-backlog/dist/index.js"
-  ]
-}
-```
-
-Add the TUI entrypoint to `~/.config/opencode/cli.json`:
-
-```json
-{
-  "plugins": [
-    "/nix/store/...-opencode-backlog-0.1.0/lib/opencode-backlog/dist/tui.js"
-  ]
-}
-```
-
-Restart the OpenCode service after the first installation:
-
-```sh
-opencode2 service restart
-```
-
-Reopen the TUI to load the TUI plugin.
-
-## Use The Backlog
-
-Ask the agent to manage tasks in normal language:
-
-```text
-Add a Todo task to document the release process.
-Add a Blocked category after Doing.
-Move the release task to Blocked.
-Purge all tasks in Done.
-```
-
-Open the command palette and select `Browse backlog` to inspect tasks. Select a task to view its ID, notes, and category.
-
-Run `/backlog` or `/tasks` to open the same browser directly.
-
-The backlog browser provides these shortcuts:
-
-- `Enter` opens the selected task details.
-- `n` creates a task.
-- `c` changes the selected task category.
-- `e` edits the selected task.
-- `d` deletes the selected task after confirmation.
-- `p` purges all tasks from a selected category after confirmation.
-
-Click a sidebar task to open its details. The detail dialog provides `c`, `e`, and `d` for the same actions.
-
-## Agent Tools
-
-| Tool | Purpose |
-| --- | --- |
-| `backlog_list` | List tasks with optional `category` and `query` filters. |
-| `backlog_add` | Add a task at an optional category and position. |
-| `backlog_update` | Change a task title or notes. |
-| `backlog_move` | Change a task category or position. |
-| `backlog_remove` | Permanently remove a task. |
-| `backlog_category_add` | Add a category with a stable ID, title, color, and icon. |
-| `backlog_category_update` | Change a category title, color, or icon. |
-| `backlog_category_move` | Change a category position. |
-| `backlog_category_remove` | Remove an empty category. |
-| `backlog_category_purge` | Permanently remove all tasks from a category. |
-
-The agent receives task IDs from `backlog_list` and from each mutation result.
-
-## Backlog File
-
-The plugin creates `BACKLOG.json` when the first task or category is added:
-
-```json
-{
-  "version": 2,
-  "categories": [
-    { "id": "todo", "title": "Todo", "color": "subdued", "icon": "circle" },
-    { "id": "doing", "title": "Doing", "color": "warning", "icon": "dot" },
-    { "id": "blocked", "title": "Blocked", "color": "error", "icon": "cross" },
-    { "id": "done", "title": "Done", "color": "success", "icon": "check" }
-  ],
-  "items": [
     {
-      "id": "c50437e3-2a57-424d-9257-32ec432145a9",
-      "title": "Add invoice search",
-      "notes": "Search by customer name and invoice number.",
-      "status": "doing"
+      "package": "C:/Users/Joaku/Desktop/Dev/personal/opencode-plugins",
+      "options": {
+        "defaultMode": "session"
+      }
     }
   ]
 }
 ```
 
-The category array defines category order. The item array defines task order inside each category.
+`defaultMode` accepts `session` (the default) or `project`. `/backlog-scope`
+offers both modes and **Use configured default**, which clears that session's
+override. Changing the configured default affects sessions without overrides.
 
-Category IDs stay stable when titles change. The plugin rejects tasks that reference an unknown category ID.
+The package exports `./tui`, so OpenCode can load its TUI entrypoint alongside
+the server. Reopen the TUI after enabling it. This fork has separate plugin IDs,
+tool names, and commands; it can coexist with the upstream plugin during
+development, but that produces two sidebar sections and two independent stores.
 
-Category colors use theme-aware values: `default`, `subdued`, `error`, `warning`, `success`, or `info`.
+After enabling this fork, update agent instructions to use `session_backlog_*`
+instead of the original `backlog_*` tools. Configuration alone does not make
+agents follow a mandatory TODO workflow. A suggested rule is:
 
-Category icons use `circle`, `dot`, `check`, `cross`, `pause`, `diamond`, or `none`.
-
-Known category IDs provide style presets when color or icon is absent:
-
-| ID | Color | Icon |
-| --- | --- | --- |
-| `todo` | `subdued` | `circle` |
-| `doing` | `warning` | `dot` |
-| `blocked` | `error` | `cross` |
-| `review` | `info` | `diamond` |
-| `waiting` | `warning` | `pause` |
-| `done` | `success` | `check` |
-| `cancelled` | `subdued` | `cross` |
-
-The plugin reads version 1 files with the default categories. The next backlog change writes the file as version 2.
-
-Commit `BACKLOG.json` when the backlog must follow the project. Ignore it when the backlog must remain local.
-
-## Verify The Installation
-
-List active server plugins:
-
-```sh
-opencode2 api get /api/plugin
+```md
+Use session_backlog_* for every task that requires actions. Review the selected
+backlog first, reuse relevant tasks, and track todo → doing → done accurately.
+Use blocked with explanatory notes when work cannot continue. Respect the
+user-selected scope; do not change it or delete tasks without authorization.
+Purely informational questions do not require tasks.
 ```
 
-The response must include `opencode.backlog`.
+## Commands
 
-Open the command palette in the TUI. The `Browse backlog` command confirms that the TUI entrypoint loaded.
+| Command | Purpose |
+| --- | --- |
+| `/session-tasks` | Browse the selected backlog, 20 tasks per page |
+| `/session-task-add` | Add a task |
+| `/session-task-move` | Change a task's category |
+| `/session-backlog-categories` | Manage the selected backlog's categories |
+| `/session-backlog-purge` | Purge a category after confirmation |
+| `/backlog-scope` | Choose this session's scope or restore the configured default |
+| `/session-backlogs` | Read-only history of stored backlogs in this project |
 
-## Development
+The sidebar shows up to eight pending tasks, counts, and a compact completed
+summary. Full notes load only when a task is opened. Loading, empty, and error
+states are distinct. RPC events refresh it; a 15-second refresh recovers from
+missed events or another OpenCode server writing to the same database.
 
-Run all development commands through Nix:
+Status colors use the active OpenCode theme: Todo uses info (usually blue),
+Doing uses warning (usually amber), Blocked uses error (usually red), and Done
+uses success (usually green). Headers, icons, task rows, task-detail status,
+and the completed summary share the same category color. Labels and icons remain
+visible so status is not conveyed by color alone. Scope and action links use
+info; destructive actions use error.
 
-```sh
-nix develop
-nix develop -c pre-commit run --all-files
-nix develop -c npm run check
-nix develop -c npm test
-nix flake check --print-build-logs
+Existing category colors are preserved. Customize a category's color with
+`/session-backlog-categories`; the Todo color above applies to newly created
+backlogs, not an automatic recoloring of existing data. Subdued task titles use
+the normal text color for readability while their headers and icons stay muted.
+
+## Agent tools
+
+The tools resolve the calling session automatically. They never accept an
+arbitrary session or project ID from the agent.
+
+- `session_backlog_list`: category/search filters, `offset`, `limit` (1–50),
+  `activeOnly`, and optional note previews. The default page size is 20.
+- `session_backlog_get`: one task with its full notes.
+- `session_backlog_add`, `session_backlog_update`, `session_backlog_move`,
+  `session_backlog_remove`.
+- `session_backlog_category_add`, `session_backlog_category_update`,
+  `session_backlog_category_move`, `session_backlog_category_remove`,
+  `session_backlog_category_purge`.
+
+List responses identify their `mode` and `boardID`. In session mode, another
+session's isolated tasks are inaccessible through these tools. In project mode,
+sharing is intentional. Removing tasks and purging categories are destructive;
+agent instructions must require explicit authorization.
+
+## SQLite and size management
+
+One database holds normalized backlogs, categories, tasks, and per-session mode
+preferences. Defaults:
+
+```text
+~/.local/share/opencode/kodradev-opencode-backlog/backlog.sqlite
+$XDG_DATA_HOME/opencode/kodradev-opencode-backlog/backlog.sqlite   (when XDG_DATA_HOME is set)
 ```
 
-Entering `nix develop` installs the repository pre-commit hook. The hook checks Nix formatting, GitHub Actions, JSON, merge conflicts, file sizes, and whitespace.
+An optional absolute `databasePath` in server plugin options overrides this.
+The TUI talks to the server over RPC and never opens a local database, so it can
+work against an authenticated remote OpenCode service.
 
-`BACKLOG.json` is not required by the test suite.
+- Session backlog keys derive from the real OpenCode session ID.
+- Project backlog keys use the OpenCode project ID. Non-Git locations use a
+  normalized-directory hash so unrelated non-Git directories do not share one
+  global backlog. Git worktrees belonging to the same project share its backlog.
+- Writes use SQLite transactions, foreign keys, WAL, a busy timeout, and schema
+  versioning. A failed write rolls back as a whole.
+- Dialog writes require the same backlog identity and revision they loaded.
+  Concurrent edits or scope changes reject stale writes rather than overwriting
+  another agent's work.
+- Each backlog is limited to 1,000 tasks and 32 categories. Titles are limited
+  to 240 characters and notes to 16 KiB of UTF-8 data per task.
+- List output omits notes by default; optional previews are at most 512
+  characters. Full notes are available through `session_backlog_get`.
+- No conversations, attachments, or unbounded mutation history are stored.
 
-## Release
+These limits bound individual backlogs and responses, **not total disk usage**:
+retained backlogs accumulate. There is no automatic deletion, retention policy,
+or archival/compaction command in this first version. WAL checkpoints do not
+remove retained tasks or reclaim all previously allocated database pages.
+Explicit export, archival, disk statistics, and maintenance are future work.
 
-Publish each release from an authenticated workstation:
+Existing `BACKLOG.json` files are neither imported nor modified. The original
+JSON store implementation remains as upstream reference code; neither the fork
+server nor its TUI uses it.
 
-```sh
-npm login
-npm publish
-```
+## Development boundaries
 
-Update the package version, then push its commit and tag:
-
-```sh
-npm version patch
-git push origin master --follow-tags
-```
-
-Use `minor` or `major` instead of `patch` when the release requires it. Keep the tag equal to the `package.json` version.
-
-## Compatibility
-
-This project targets OpenCode V2. The V2 plugin API is beta and can change between OpenCode releases.
-
-Match the plugin API version in `package.json` with the OpenCode release that loads the plugin.
+- `origin` points to KodraDev/opencode-backlog; `upstream` points to sachahjkl/opencode-backlog.
+- No global OpenCode configuration or installed upstream plugin is changed by building.
+- Keep attribution. Do not push this variant to upstream accidentally.
+- Functional SQLite/RPC validation and visual TUI validation remain necessary
+  before treating this development version as production-ready.

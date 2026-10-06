@@ -1,21 +1,19 @@
 {
-  "name": "opencode-backlog",
-  "version": "0.2.3",
-  "description": "Project backlog tools and sidebar for OpenCode 2",
+  "name": "kodradev-opencode-backlog",
+  "version": "0.1.0",
+  "description": "SQLite-backed hybrid project/session backlog tools and sidebar for OpenCode 2",
   "type": "module",
+  "private": true,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sachahjkl/opencode-backlog.git"
+    "url": "git+https://github.com/KodraDev/opencode-backlog.git"
   },
   "bugs": {
-    "url": "https://github.com/sachahjkl/opencode-backlog/issues"
+    "url": "https://github.com/KodraDev/opencode-backlog/issues"
   },
-  "homepage": "https://github.com/sachahjkl/opencode-backlog#readme",
+  "homepage": "https://github.com/KodraDev/opencode-backlog#readme",
   "engines": {
     "node": ">=24"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "exports": {
     ".": "./dist/index.js",
@@ -24,11 +22,13 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node script/build-tui.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
+    "typecheck:src": "tsc -p tsconfig.build.json --noEmit",
     "prepack": "npm run build",
     "test": "npm run build && tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js"
   },
@@ -39,16 +39,22 @@
     "kanban"
   ],
   "license": "MIT",
+  "overrides": {
+    "seroval": "1.6.8",
+    "brace-expansion@2": "2.1.7"
+  },
   "dependencies": {
-    "@opencode-ai/plugin": "0.0.0-beta-17927",
+    "@opencode/client": "2.0.23",
+    "@opencode/plugin": "2.0.23",
     "proper-lockfile": "^4.1.2"
   },
   "peerDependencies": {
-    "@opentui/solid": ">=0.5.6",
+    "@opentui/solid": ">=0.5.14",
     "solid-js": ">=1.9.0"
   },
   "devDependencies": {
-    "@opentui/solid": "0.5.6",
+    "@types/bun": "1.4.2",
+    "@opentui/solid": "0.5.14",
     "@types/node": "24.3.0",
     "@types/proper-lockfile": "^4.1.4",
     "solid-js": "1.9.12",
