@@ -18,7 +18,7 @@ are retained. Storage and scope resolution are different:
 ## Status
 
 This is an initial development version, not a production-verified plugin.
-The package is not published to npm. The original installed plugin is not replaced automatically.
+The original installed plugin is not replaced automatically.
 The fork targets OpenCode `2.0.23` and its native V2 plugin API.
 
 ## Build
@@ -44,15 +44,15 @@ that the new SQLite or hybrid behavior works.
 
 ## Enable when ready
 
-Add the local package directory to the global OpenCode configuration. Preserve
-other plugin entries. On Windows, forward slashes work in JSON paths:
+Add the npm package to the global OpenCode configuration. Preserve other plugin
+entries. Remove the original `opencode-backlog` entry to avoid duplicate sidebars:
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      "package": "C:/Users/Joaku/Desktop/Dev/personal/opencode-plugins",
+      "package": "kodradev-opencode-backlog@0.1.0",
       "options": {
         "defaultMode": "session"
       }
@@ -170,6 +170,25 @@ JSON store implementation remains as upstream reference code; neither the fork
 server nor its TUI uses it.
 
 ## Development boundaries
+
+### npm releases
+
+`.github/workflows/publish.yml` publishes new versions on pushes to `main` and
+supports manual dispatch from `main`. It uses GitHub-hosted runners, Node.js 24,
+and npm Trusted Publishing (OIDC); no `NPM_TOKEN` secret is needed.
+
+In npm package settings, authorize organization `KodraDev`, repository
+`opencode-backlog`, and workflow filename `publish.yml`, with no environment name.
+Enable direct `npm publish`, not only staged publishing, for fully automatic
+releases. The workflow typechecks and builds production sources without running
+tests, checks package contents, and skips versions already on npm. Registry
+failures stop publication instead of being treated as a missing version.
+
+Increase `package.json` and the lockfile version before each release. npm versions
+cannot be overwritten. Release jobs are serialized to avoid concurrent publishes.
+The original upstream `ci.yml` is preserved separately; it is not invoked by this
+release workflow. `[skip ci]` commits skip push workflows, but the publish workflow
+can still be dispatched manually.
 
 - `origin` points to KodraDev/opencode-backlog; `upstream` points to sachahjkl/opencode-backlog.
 - No global OpenCode configuration or installed upstream plugin is changed by building.

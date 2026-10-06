@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "description": "SQLite-backed hybrid project/session backlog tools and sidebar for OpenCode 2",
   "type": "module",
-  "private": true,
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/KodraDev/opencode-backlog.git"
