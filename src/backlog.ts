@@ -42,7 +42,10 @@ export const DEFAULT_CATEGORIES: readonly Category[] = [
   { id: "todo", title: "Todo", ...CATEGORY_PRESETS.todo },
   { id: "doing", title: "Doing", ...CATEGORY_PRESETS.doing },
   { id: "blocked", title: "Blocked", ...CATEGORY_PRESETS.blocked },
+  { id: "review", title: "Review", ...CATEGORY_PRESETS.review },
+  { id: "waiting", title: "Waiting", ...CATEGORY_PRESETS.waiting },
   { id: "done", title: "Done", ...CATEGORY_PRESETS.done },
+  { id: "cancelled", title: "Cancelled", ...CATEGORY_PRESETS.cancelled },
 ]
 
 export const EMPTY_BACKLOG: Backlog = { version: 2, categories: DEFAULT_CATEGORIES, items: [] }

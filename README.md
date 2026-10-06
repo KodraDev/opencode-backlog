@@ -17,7 +17,7 @@ Package: [kodradev-opencode-backlog on npm](https://www.npmjs.com/package/kodrad
 - Storage statistics and confirmed cleanup of finished tasks unchanged for more than 24 hours.
 - Bundled `kodradev-backlog` skill and workflow reminder; no manual `AGENTS.md` setup needed.
 
-New backlogs start with **Todo**, **Doing**, **Blocked**, and **Done**. Categories can be renamed, styled, reordered, or removed when empty.
+New backlogs start with **Todo**, **Doing**, **Blocked**, **Review**, **Waiting**, **Done**, and **Cancelled**. Categories can be renamed, styled, reordered, or removed when empty.
 
 Switch scope with `/backlog-scope`. Switching selects another backlog; it never moves, merges, or deletes tasks.
 
@@ -88,18 +88,21 @@ Use an exact version instead of `latest` when you need a reproducible, pinned in
 
 ### Task Categories (Statuses)
 
-A task's `status` is its category ID, not a separate task type. New backlogs include these four sections:
+A task's `status` is its category ID, not a separate task type. New backlogs include these seven sections:
 
 | Section | Status ID | What belongs here |
 | --- | --- | --- |
 | **Todo** | `todo` | Planned work that has not started. Record the next actionable steps here. |
 | **Doing** | `doing` | Work currently being executed. Move a task here before starting and keep its progress notes current. |
 | **Blocked** | `blocked` | Unfinished work that cannot continue because of a dependency, missing access, pending decision, or other obstacle. Explain the blocker and what would unblock it in `notes`. |
+| **Review** | `review` | Work awaiting review before it can be considered complete. Note what needs checking and by whom. |
+| **Waiting** | `waiting` | Work paused until an expected event or response arrives. Record what is expected and from whom. |
 | **Done** | `done` | Completed work that meets its completion criteria. Record the actual outcome and verification performed; finishing a task does not delete it. |
+| **Cancelled** | `cancelled` | Work intentionally abandoned, retained for context rather than deleted. Note why it was dropped. |
 
-Typical flow: **Todo → Doing → Done**. If work cannot continue, move it to **Blocked**; once unblocked, return it to **Doing** when resuming or **Todo** if it is waiting to be scheduled. Moving between categories does not execute work or resolve blockers automatically.
+Typical flow: **Todo → Doing → Done**. Move work to **Blocked** when a dependency or missing access stops it, to **Review** when it awaits review, and to **Waiting** when it awaits an external event or response. Once unblocked, return it to **Doing** when resuming or **Todo** if it is waiting to be scheduled. Use **Cancelled** for work abandoned on purpose. Moving between categories does not execute work or resolve blockers automatically.
 
-Categories are editable through `/session-backlog-categories`: add, rename, style, reorder, or remove an empty category. Renaming a category changes its display title, not its stable ID. Existing backlogs keep their saved categories; if an older backlog has no Blocked section, add one with ID `blocked`.
+Categories are editable through `/session-backlog-categories`: add, rename, style, reorder, or remove an empty category. Renaming a category changes its display title, not its stable ID. Existing backlogs keep their saved categories; if an older backlog lacks a section, add one with the matching ID (`blocked`, `review`, `waiting`, or `cancelled`).
 
 The plugin also provides styling presets for optional categories; these are not created by default:
 
