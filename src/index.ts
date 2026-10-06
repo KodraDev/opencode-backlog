@@ -270,7 +270,7 @@ export default Plugin.define({
     await context.tool.transform((tools) => {
       tools.add({
         name: "session_backlog_list",
-        description: "List selected backlog before work/resume; reuse existing tasks. Completed (done/cancelled) tasks are hidden by default; counts per category still include them. Pass activeOnly:false only when completed tasks are needed. Paginated, notes omitted or previewed. Use get for full notes. Scope chosen by user.",
+        description: "List selected backlog before starting/resuming medium/high-complexity or long-running tracked work, or when user requests it; skip simple untracked actions. Reuse existing tasks. Completed (done/cancelled) tasks are hidden by default; counts per category still include them. Pass activeOnly:false only when completed tasks are needed. Paginated, notes omitted or previewed. Use get for full notes. Scope chosen by user.",
         input: {
           type: "object",
           properties: {
