@@ -72,6 +72,32 @@ Click a sidebar task or select **Browse selected backlog** in the command palett
 
 Deleting tasks or purging categories requires explicit user authorization.
 
+### Task Descriptions And Continuity
+
+Agents use an actionable `title` and the existing `notes` field for task context.
+Non-trivial tasks require a brief description and a current continuation checkpoint:
+
+```text
+Objective: What should change and why.
+Scope/constraints: Relevant files and limits.
+Completion criteria: What must be true before marking done.
+Progress: Completed work and verification actually performed.
+Next step: The next concrete action.
+Decisions/blockers: Relevant choices or blockers, when present.
+```
+
+The bundled workflow requires agents to update notes at meaningful milestones
+and before planned compaction or handoffs. After resuming or compacting, agents
+must review the selected backlog and read relevant Doing tasks with
+`session_backlog_get`. List output omits notes by default; `includeNotes` returns
+previews, which are not a substitute for full notes.
+
+A compaction hook reminds the summarizer to preserve known task IDs, scope, and
+next steps, and to request backlog recovery on resume. It does not write notes
+automatically; automatic compaction can occur before a checkpoint is saved.
+These are agent workflow instructions, not schema validation: simple tasks and
+manual entries can still omit notes. Existing tasks and storage remain unchanged.
+
 ## Agent Tools
 
 Tools use the calling session's selected scope automatically.
