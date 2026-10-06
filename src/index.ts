@@ -55,7 +55,9 @@ function sameDirectory(left: string, right: string): boolean {
 
 async function sessionScope(context: Plugin.Context, sessionID: string): Promise<SessionScope> {
   const session = await context.session.get({ sessionID })
-  if (session.projectID !== context.location.project.id || !sameDirectory(session.location.directory, context.location.directory)) {
+  // A session can retain a historical project ID after repository rediscovery.
+  // Its current directory, not that saved ID, identifies the plugin location.
+  if (!sameDirectory(session.location.directory, context.location.directory)) {
     throw new Error("This session belongs to a different location")
   }
   const { store, defaults } = runtime(context)
