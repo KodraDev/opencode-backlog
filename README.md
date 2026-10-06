@@ -80,12 +80,54 @@ Use an exact version instead of `latest` when you need a reproducible, pinned in
 
 ## Use The Backlog
 
+### Task Categories (Statuses)
+
+A task's `status` is its category ID, not a separate task type. New backlogs include these four sections:
+
+| Section | Status ID | What belongs here |
+| --- | --- | --- |
+| **Todo** | `todo` | Planned work that has not started. Record the next actionable steps here. |
+| **Doing** | `doing` | Work currently being executed. Move a task here before starting and keep its progress notes current. |
+| **Blocked** | `blocked` | Unfinished work that cannot continue because of a dependency, missing access, pending decision, or other obstacle. Explain the blocker and what would unblock it in `notes`. |
+| **Done** | `done` | Completed work that meets its completion criteria. Record the actual outcome and verification performed; finishing a task does not delete it. |
+
+Typical flow: **Todo → Doing → Done**. If work cannot continue, move it to **Blocked**; once unblocked, return it to **Doing** when resuming or **Todo** if it is waiting to be scheduled. Moving between categories does not execute work or resolve blockers automatically.
+
+Categories are editable through `/session-backlog-categories`: add, rename, style, reorder, or remove an empty category. Renaming a category changes its display title, not its stable ID. Existing backlogs keep their saved categories; if an older backlog has no Blocked section, add one with ID `blocked`.
+
+The plugin also provides styling presets for optional categories; these are not created by default:
+
+| Optional section | Status ID | Suggested use |
+| --- | --- | --- |
+| **Review** | `review` | Work awaiting review before it can be considered complete. |
+| **Waiting** | `waiting` | Work paused until an expected event or response arrives. |
+| **Cancelled** | `cancelled` | Work intentionally abandoned, retained for context rather than deleted. |
+
+Custom category IDs are supported too. The pending-task preview excludes IDs `done` and `cancelled`; other categories, including `blocked`, remain pending.
+
+### Sidebar And Dialogs
+
+| Section | What it does |
+| --- | --- |
+| **Scope indicator** | Shows **Only this session** or **Shared project**. Click it to choose the backlog scope without moving any tasks. |
+| **Category groups** | Show up to eight pending tasks in total, grouped by category, with each category's full task count. Empty groups and groups without tasks in the preview are hidden. |
+| **More pending / completed links** | Open the full backlog browser. Done tasks remain stored and appear as a completed count rather than individual sidebar entries. |
+| **Backlog browser** | `/session-tasks` lists the selected backlog, including completed tasks, with 20 tasks per page. |
+| **Task details** | Click a task to see its category, ID, and full notes, and access task actions. |
+| **Stored backlogs** | `/session-backlogs` opens read-only history for the current project; it does not change the selected scope. |
+
+The sidebar is a preview, not the full backlog. **No pending tasks** does not mean completed or cancelled tasks have been deleted.
+
+### Agent Requests And Commands
+
 Ask the agent to manage tasks in normal language:
 
 ```text
 Add a Todo task to document the release process.
 Move the release task to Doing.
-Add notes explaining what remains blocked.
+Move the release task to Blocked and note that it needs registry access.
+Move it back to Doing once access is available.
+Mark it Done only after the documentation is complete.
 ```
 
 Click a sidebar task or select **Browse selected backlog** in the command palette to view task details.
