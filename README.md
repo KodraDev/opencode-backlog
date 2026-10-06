@@ -28,14 +28,28 @@ This is an early development version, not yet production-verified.
 
 ## Install
 
-Add the package to `~/.config/opencode/opencode.jsonc`, preserving other plugin entries:
+### Option 1: OpenCode CLI
+
+Install the latest published npm release and add it to your global OpenCode configuration:
+
+```sh
+opencode plugin add kodradev-opencode-backlog@latest
+```
+
+OpenCode V2 supports npm tags such as `latest`. This package exports both the server plugin and `./tui`, so OpenCode loads the agent tools and sidebar together. No separate TUI installation is needed.
+
+The plugin defaults to session mode. To customize its options, edit the entry created by the command into the object form below; do not add a duplicate entry.
+
+### Option 2: Manual Configuration
+
+Add the package to `~/.config/opencode/opencode.jsonc`, preserving other plugin entries. For installation in one project only, use that project's `opencode.jsonc` instead:
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      "package": "kodradev-opencode-backlog@0.1.1",
+      "package": "kodradev-opencode-backlog@latest",
       "options": {
         "defaultMode": "session"
       }
@@ -44,9 +58,25 @@ Add the package to `~/.config/opencode/opencode.jsonc`, preserving other plugin 
 }
 ```
 
-Set `defaultMode` to `project` for a shared backlog. `/backlog-scope` overrides it for one session; **Use configured default** clears that override.
+| Option | Purpose |
+| --- | --- |
+| `defaultMode` | `session` (default) gives each session its own backlog; `project` shares a backlog across sessions in the same project. |
+| `databasePath` | Optional absolute path to the server's SQLite database; omit it to use the [default storage location](#storage). |
+
+`/backlog-scope` overrides `defaultMode` for one session; **Use configured default** clears that override.
 
 Remove the original `opencode-backlog` plugin entry to avoid duplicate sidebars. The package includes both server and TUI entrypoints. Reopen the TUI after enabling it.
+
+### Updates
+
+`@latest` selects npm's latest published release rather than pinning `0.1.1`. It does not guarantee automatic upgrades: OpenCode can load a cached package and check for updates without installing them. Check or update the globally configured package explicitly:
+
+```sh
+opencode plugin check kodradev-opencode-backlog@latest
+opencode plugin update kodradev-opencode-backlog@latest
+```
+
+Use an exact version instead of `latest` when you need a reproducible, pinned installation. See the [OpenCode V2 plugin guide](https://opencode.ai/v2/docs/plugins) for CLI installation and update behavior.
 
 ## Use The Backlog
 
