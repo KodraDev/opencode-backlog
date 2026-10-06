@@ -1,6 +1,6 @@
 {
   "name": "kodradev-opencode-backlog",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "SQLite-backed hybrid project/session backlog tools and sidebar for OpenCode 2",
   "type": "module",
   "publishConfig": {
@@ -58,8 +58,9 @@
     "solid-js": ">=1.9.0"
   },
   "devDependencies": {
-    "@types/bun": "1.4.2",
+    "@opencode/theme": "2.0.23",
     "@opentui/solid": "0.5.14",
+    "@types/bun": "1.4.2",
     "@types/node": "24.3.0",
     "@types/proper-lockfile": "^4.1.4",
     "solid-js": "1.9.12",

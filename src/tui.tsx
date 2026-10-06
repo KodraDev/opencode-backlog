@@ -27,7 +27,8 @@ import type { BacklogPage } from "./session-store.js"
 const pinned = new WeakMap<Plugin.Context, BacklogAccess>()
 
 function pinContext(context: Plugin.Context, access: BacklogAccess): Plugin.Context {
-  const copy = { ...context }
+  // Keep live theme/location getters while capturing only the backlog access.
+  const copy = Object.defineProperties({}, Object.getOwnPropertyDescriptors(context)) as Plugin.Context
   pinned.set(copy, access)
   return copy
 }
@@ -44,9 +45,9 @@ function categoryColorName(category: Category): CategoryColor {
 
 function categoryColor(context: Plugin.Context, category: Category) {
   const name = categoryColorName(category)
-  if (name === "default") return context.theme.text.default
-  if (name === "subdued") return context.theme.text.subdued
-  return context.theme.text.feedback[name].default
+  if (name === "default") return context.theme.text.base
+  if (name === "subdued") return context.theme.text.muted
+  return context.theme.text.feedback[name].base
 }
 
 function categoryIconName(category: Category): CategoryIcon {
@@ -65,7 +66,7 @@ function categoryIcon(category: Category): string {
 }
 
 function BacklogView(props: { context: Plugin.Context; sessionID: string }) {
-  const theme = props.context.theme
+  const theme = () => props.context.theme
   const client = props.context.client.rpc(SessionBacklog)
   const controller = new AbortController()
   const [snapshot, { refetch }] = createResource(() => props.sessionID, async (sessionID): Promise<{ page?: BacklogPage; error?: string }> => {
@@ -103,20 +104,20 @@ function BacklogView(props: { context: Plugin.Context; sessionID: string }) {
 
   return (
     <box>
-      <text fg={theme.text.default}>
+      <text fg={theme().text.base}>
         <b>Backlog</b>
       </text>
       <Show when={page()}>
-        <text fg={theme.text.feedback.info.default} onMouseUp={() => perform(chooseScope)}>
+        <text fg={theme().text.action.primary.base} onMouseUp={() => perform(chooseScope)}>
           {page()?.mode === "project" ? "Shared project" : "Only this session"} · change scope
         </text>
       </Show>
-      <Show when={snapshot.loading && !page()}><text fg={theme.text.subdued}>Loading tasks…</text></Show>
+      <Show when={snapshot.loading && !page()}><text fg={theme().text.muted}>Loading tasks…</text></Show>
       <Show when={error()}>
-        {(message) => <text fg={theme.text.feedback.error.default}>{message()}</text>}
+        {(message) => <text fg={theme().text.feedback.error.base}>{message()}</text>}
       </Show>
       <Show when={!error() && page()?.total === 0}>
-        <text fg={theme.text.subdued}>No pending tasks</text>
+        <text fg={theme().text.muted}>No pending tasks</text>
       </Show>
       <For each={page()?.categories.filter((category) => page()?.items.some((item) => item.status === category.id)) ?? []}>
         {(category) => {
@@ -138,7 +139,7 @@ function BacklogView(props: { context: Plugin.Context; sessionID: string }) {
                     <Show when={categoryIcon(category)}>
                       {(icon) => <text fg={color()} flexShrink={0}>{icon()}</text>}
                     </Show>
-                    <text fg={categoryColorName(category) === "subdued" ? theme.text.default : color()} wrapMode="none" truncate flexGrow={1} minWidth={0}>
+                    <text fg={categoryColorName(category) === "subdued" ? theme().text.base : color()} wrapMode="none" truncate flexGrow={1} minWidth={0}>
                       {item.title}
                     </text>
                   </box>
@@ -149,7 +150,7 @@ function BacklogView(props: { context: Plugin.Context; sessionID: string }) {
         }}
       </For>
       <Show when={(page()?.total ?? 0) > 8}>
-        <text fg={theme.text.feedback.info.default} onMouseUp={() => perform(browseBacklog)}>
+        <text fg={theme().text.action.primary.base} onMouseUp={() => perform(browseBacklog)}>
           +{(page()?.total ?? 0) - 8} pending · /session-tasks
         </text>
       </Show>
@@ -178,7 +179,7 @@ function TaskAction(props: {
 }) {
   return (
     <text
-      fg={props.danger ? props.context.theme.text.feedback.error.default : props.context.theme.text.feedback.info.default}
+      fg={props.danger ? props.context.theme.text.action.destructive.base : props.context.theme.text.action.primary.base}
       onMouseUp={props.run}
     >
       <b>{props.shortcut}</b> {props.label}
@@ -215,20 +216,20 @@ function TaskDetailsDialog(props: { context: Plugin.Context; item: BacklogItem; 
   return (
     <box paddingLeft={2} paddingRight={2} gap={1}>
       <box flexDirection="row" justifyContent="space-between" gap={2}>
-        <text fg={props.context.theme.text.default} wrapMode="word" flexGrow={1}>
+        <text fg={props.context.theme.text.base} wrapMode="word" flexGrow={1}>
           <b>{props.item.title}</b>
         </text>
-        <text fg={props.context.theme.text.subdued} onMouseUp={() => props.context.ui.dialog.clear()}>
+        <text fg={props.context.theme.text.muted} onMouseUp={() => props.context.ui.dialog.clear()}>
           esc
         </text>
       </box>
       <text fg={categoryColor(props.context, category())}>
         {categoryIcon(category())} <b>{category().title}</b>
       </text>
-      <text fg={props.context.theme.text.subdued} wrapMode="word">
+      <text fg={props.context.theme.text.muted} wrapMode="word">
         ID: {props.item.id}
       </text>
-      <text fg={props.context.theme.text.default} wrapMode="word">
+      <text fg={props.context.theme.text.base} wrapMode="word">
         {props.item.notes ?? "No notes"}
       </text>
       <box flexDirection="row" justifyContent="flex-end" gap={2} paddingBottom={1}>
