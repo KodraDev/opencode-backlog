@@ -120,6 +120,7 @@ Custom category IDs are supported too. The pending-task preview excludes IDs `do
 | --- | --- |
 | **Scope indicator** | Shows **Only this session** or **Shared project**. Click it to choose the backlog scope without moving any tasks. |
 | **Settings** | Opens global or per-project settings from the sidebar header, the scope chooser, or `/backlog-settings`. |
+| **Add / Browse / Reorder** | Always-visible actions below the Backlog heading in the main sidebar and subagent panel. Add creates a task, Browse opens the full list, and Reorder changes a task's position within its category. |
 | **Category groups** | Show up to eight pending tasks in total, grouped by category, with each category's full task count. Empty groups and groups without tasks in the preview are hidden. |
 | **More pending / completed links** | Open the full backlog browser. Done tasks remain stored and appear as a completed count rather than individual sidebar entries. |
 | **Backlog browser** | `/session-tasks` lists the selected backlog, including completed tasks, with 20 tasks per page. |
@@ -127,6 +128,27 @@ Custom category IDs are supported too. The pending-task preview excludes IDs `do
 | **Stored backlogs** | `/session-backlogs` opens read-only history for the current project; it does not change the selected scope. |
 
 The sidebar is a preview, not the full backlog. **No pending tasks** does not mean completed or cancelled tasks have been deleted.
+
+### Subagent Backlog Panel
+
+OpenCode hides its standard sidebar in child sessions. The plugin opens its own
+live backlog panel when you enter a subagent session, without modifying OpenCode.
+The panel stays pinned while you are in that child session: it has no close
+control or close shortcut, and it reopens if the host closes or replaces it.
+It uses that session's selected backlog scope; it does not copy parent tasks or
+change the scope. Returning to the parent closes the automatically opened panel
+and leaves the normal sidebar unchanged.
+
+Child sessions have no composer, so opening or restoring the panel never
+requires typing a command. The panel is available only in subagent sessions;
+regular sessions keep the normal sidebar. Narrow terminals show the panel
+fullscreen; widen the terminal to see the transcript and backlog side by side.
+Wider terminals support
+side-by-side presentation and the **Fullscreen** / **Restore** control.
+
+Panel shortcuts while focused: `n` adds a task, `b` opens the complete backlog
+browser, `r` reorders a task, and `f` toggles fullscreen. Task details, settings, scope selection,
+live updates, and the eight-task preview match the sidebar.
 
 ### Agent Requests And Commands
 
@@ -147,6 +169,7 @@ Click a sidebar task or select **Browse selected backlog** in the command palett
 | `/session-tasks` | Browse the selected backlog, 20 tasks per page |
 | `/session-task-add` | Add a task |
 | `/session-task-move` | Change a task's category |
+| `/session-task-reorder` | Choose a task and set its final position within its category |
 | `/session-backlog-categories` | Manage the selected backlog's categories |
 | `/session-backlog-purge` | Purge a category after confirmation |
 | `/backlog-scope` | Choose this session's scope or restore the configured default |
@@ -154,6 +177,12 @@ Click a sidebar task or select **Browse selected backlog** in the command palett
 | `/session-backlogs` | Read-only history of stored backlogs in this project |
 
 Deleting tasks or purging categories requires explicit user authorization.
+
+To reorder a task, click **Reorder**, use `/session-task-reorder`, or press `r`
+in the backlog browser or task details. Choose the task, then enter its final
+position from `1` to the category's task count. Its category, title, and notes
+stay unchanged. Scope and revision checks reject stale writes. The main prompt
+does not capture the panel's single-letter shortcuts while you type.
 
 ### Backlog Settings
 

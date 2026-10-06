@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { Plugin } from "@opencode/plugin/tui"
-import { createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js"
+import type { PanelInput } from "@opencode/plugin/tui/context"
+import { createEffect, createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import {
   addCategory,
   CATEGORY_COLORS,
@@ -26,6 +27,7 @@ import type { BacklogPage } from "./session-store.js"
 import { LIGHTWEIGHT_NOTES_MAX, parseLightweightNotes, parseRetentionDays, type BacklogSettings, type SettingsScope, type TaskDetail } from "./settings.js"
 
 const pinned = new WeakMap<Plugin.Context, BacklogAccess>()
+const BACKLOG_PANEL = "kodradev.backlog.tasks"
 
 function pinContext(context: Plugin.Context, access: BacklogAccess): Plugin.Context {
   // Keep live theme/location getters while capturing only the backlog access.
@@ -34,7 +36,7 @@ function pinContext(context: Plugin.Context, access: BacklogAccess): Plugin.Cont
   return copy
 }
 
-type BrowseAction = "details" | "status" | "edit" | "delete"
+type BrowseAction = "details" | "status" | "reorder" | "edit" | "delete"
 
 function categoryTitle(categories: readonly Category[], status: Status): string {
   return categories.find((category) => category.id === status)?.title ?? status
@@ -66,7 +68,7 @@ function categoryIcon(category: Category): string {
   return ""
 }
 
-function BacklogView(props: { context: Plugin.Context; sessionID: string }) {
+function BacklogView(props: { context: Plugin.Context; sessionID: string; showCommandHints?: boolean }) {
   const theme = () => props.context.theme
   const client = props.context.client.rpc(SessionBacklog)
   const controller = new AbortController()
@@ -110,6 +112,11 @@ function BacklogView(props: { context: Plugin.Context; sessionID: string }) {
       <box flexDirection="row" justifyContent="space-between" gap={1}>
         <text fg={theme().text.base}><b>Backlog</b></text>
         <text fg={theme().text.action.primary.base} onMouseUp={() => perform(manageSettings)}>Settings</text>
+      </box>
+      <box flexDirection="row" gap={2}>
+        <text fg={theme().text.action.primary.base} onMouseUp={() => perform(addBacklogItem)}>Add</text>
+        <text fg={theme().text.action.primary.base} onMouseUp={() => perform(browseBacklog)}>Browse</text>
+        <text fg={theme().text.action.primary.base} onMouseUp={() => perform(reorderBacklogItem)}>Reorder</text>
       </box>
       <Show when={page()}>
         <text fg={theme().text.action.primary.base} onMouseUp={() => perform(chooseScope)}>
@@ -155,7 +162,7 @@ function BacklogView(props: { context: Plugin.Context; sessionID: string }) {
       </For>
       <Show when={(page()?.total ?? 0) > 8}>
         <text fg={theme().text.action.primary.base} onMouseUp={() => perform(browseBacklog)}>
-          +{(page()?.total ?? 0) - 8} pending · /session-tasks
+          +{(page()?.total ?? 0) - 8} pending · {props.showCommandHints === false ? "browse all" : "/session-tasks"}
         </text>
       </Show>
       <Show when={(page()?.counts.done ?? 0) > 0}>
@@ -163,9 +170,36 @@ function BacklogView(props: { context: Plugin.Context; sessionID: string }) {
           fg={categoryColor(props.context, page()?.categories.find(({ id }) => id === "done") ?? { id: "done", title: "Done" })}
           onMouseUp={() => perform(browseBacklog)}
         >
-          ✓ {page()?.counts.done} completed · /session-tasks
+          ✓ {page()?.counts.done} completed · {props.showCommandHints === false ? "browse all" : "/session-tasks"}
         </text>
       </Show>
+    </box>
+  )
+}
+
+function BacklogPanel(props: { context: Plugin.Context; panel: PanelInput }) {
+  props.context.keymap.layer(() => ({
+    commands: [
+      { bind: "f", title: "Toggle backlog fullscreen", group: "Backlog", run: props.panel.toggleFullscreen },
+      { bind: "b", title: "Browse backlog tasks", group: "Backlog", run: () => props.context.keymap.dispatch("kodradev.backlog.browse") },
+      { bind: "n", title: "Add backlog task", group: "Backlog", run: () => props.context.keymap.dispatch("kodradev.backlog.add") },
+      { bind: "r", title: "Reorder backlog task", group: "Backlog", run: () => props.context.keymap.dispatch("kodradev.backlog.reorder") },
+    ],
+  }))
+
+  return (
+    <box height="100%" minHeight={0} padding={1} gap={1}>
+      <box flexDirection="row" justifyContent="flex-end" gap={2} flexShrink={0}>
+        <text fg={props.context.theme.text.action.primary.base} onMouseUp={props.panel.toggleFullscreen}>
+          {props.panel.presentation === "fullscreen" ? "Restore" : "Fullscreen"}
+        </text>
+      </box>
+      <scrollbox flexGrow={1} minHeight={0} horizontalScrollbarOptions={{ visible: false }}>
+        <BacklogView context={props.context} sessionID={props.panel.sessionID} showCommandHints={false} />
+      </scrollbox>
+      <text fg={props.context.theme.text.muted} wrapMode="word" flexShrink={0}>
+        n add · b browse · r reorder · f fullscreen
+      </text>
     </box>
   )
 }
@@ -203,6 +237,7 @@ function TaskDetailsDialog(props: { context: Plugin.Context; item: BacklogItem; 
     )
   }
   const changeStatus = () => run(() => changeTaskStatus(props.context, props.item))
+  const reorder = () => run(() => reorderTask(props.context, props.item))
   const edit = () => run(() => editBacklogItem(props.context, props.item))
   const remove = () => run(() => removeBacklogItem(props.context, props.item))
 
@@ -212,6 +247,7 @@ function TaskDetailsDialog(props: { context: Plugin.Context; item: BacklogItem; 
     priority: 100,
     commands: [
       { bind: "c", title: "Change backlog task status", group: "Backlog", run: changeStatus },
+      { bind: "r", title: "Reorder backlog task", group: "Backlog", run: reorder },
       { bind: "e", title: "Edit backlog task", group: "Backlog", run: edit },
       { bind: "d", title: "Delete backlog task", group: "Backlog", run: remove },
     ],
@@ -238,6 +274,7 @@ function TaskDetailsDialog(props: { context: Plugin.Context; item: BacklogItem; 
       </text>
       <box flexDirection="row" justifyContent="flex-end" gap={2} paddingBottom={1}>
         <TaskAction context={props.context} shortcut="c" label="status" run={changeStatus} />
+        <TaskAction context={props.context} shortcut="r" label="reorder" run={reorder} />
         <TaskAction context={props.context} shortcut="e" label="edit" run={edit} />
         <TaskAction context={props.context} shortcut="d" label="delete" danger run={remove} />
       </box>
@@ -602,6 +639,47 @@ async function moveBacklogItem(context: Plugin.Context): Promise<void> {
   return browseBacklogWithState(context, () => {}, () => "status")
 }
 
+async function reorderBacklogItem(context: Plugin.Context): Promise<void> {
+  return browseBacklogWithState(context, () => {}, () => "reorder")
+}
+
+async function reorderTask(context: Plugin.Context, item: BacklogItem): Promise<void> {
+  const { path } = backlogLocation(context)
+  const backlog = await readBacklog(path)
+  const task = backlog.items.find((candidate) => candidate.id === item.id)
+  if (!task) throw new Error("This task no longer exists. Refresh the list.")
+  const items = backlog.items.filter((candidate) => candidate.status === task.status)
+  const category = categoryTitle(backlog.categories, task.status)
+  if (items.length < 2) {
+    await context.ui.dialog.alert({ title: "Reorder task", message: `This is the only task in ${category}.` })
+    return
+  }
+  const currentPosition = items.findIndex((candidate) => candidate.id === task.id) + 1
+  let value = String(currentPosition)
+  while (true) {
+    const input = await context.ui.dialog.prompt({
+      title: `Reorder: ${task.title}`,
+      description: `Final position in ${category}: 1–${items.length}. Current: ${currentPosition}. Category stays unchanged.`,
+      placeholder: `1–${items.length}`,
+      value,
+    })
+    if (input === undefined) return
+    value = input.trim()
+    const position = Number(value)
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(position) || position < 1 || position > items.length) {
+      context.ui.toast.show({ message: `Enter a whole-number position from 1 to ${items.length}.`, variant: "error" })
+      continue
+    }
+    if (position === currentPosition) return
+    await updateBacklog(path, (current) => ({
+      ...current,
+      items: moveItem(current.items, task.id, task.status, position - 1, current.categories),
+    }))
+    context.ui.toast.show({ message: `Moved "${task.title}" to position ${position} in ${category}.`, variant: "success" })
+    return
+  }
+}
+
 async function browseBacklogWithState(
   context: Plugin.Context,
   setOpen: (open: boolean) => void,
@@ -642,6 +720,7 @@ async function browseBacklogWithState(
     }
     const selectedAction = action()
     if (selectedAction === "status") return changeTaskStatus(captured, item)
+    if (selectedAction === "reorder") return reorderTask(captured, item)
     if (selectedAction === "edit") return editBacklogItem(captured, item)
     if (selectedAction === "delete") return removeBacklogItem(captured, item)
     showTaskDetails(captured, item, backlog.categories)
@@ -918,6 +997,29 @@ function Commands(props: { context: Plugin.Context }) {
   const [browseOpen, setBrowseOpen] = createSignal(false)
   const [browseAction, setBrowseAction] = createSignal<BrowseAction>("details")
   const [browseContext, setBrowseContext] = createSignal<Plugin.Context>()
+  const subagentSession = createMemo(() => {
+    const route = props.context.ui.router.current()
+    if (route.type !== "session") return undefined
+    const session = props.context.data.session.get(route.sessionID)
+    return session?.parentID && session.location.directory ? route.sessionID : undefined
+  })
+  // Child sessions have no composer. Keep the panel mounted without relying on
+  // a slash command, including when the host closes or replaces the panel.
+  createEffect(() => {
+    const sessionID = subagentSession()
+    const panel = props.context.ui.panel.current()
+    if (sessionID) {
+      if (panel?.name !== BACKLOG_PANEL || panel.sessionID !== sessionID) props.context.ui.panel.open(BACKLOG_PANEL)
+      return
+    }
+    if (panel?.name === BACKLOG_PANEL) props.context.ui.panel.close()
+  })
+  onCleanup(() => {
+    if (props.context.ui.panel.current()?.name === BACKLOG_PANEL) {
+      props.context.ui.panel.close()
+    }
+  })
+
   const run = async (operation: (context: Plugin.Context) => Promise<void>, source = props.context) => {
     try {
       const { path } = backlogLocation(source)
@@ -966,6 +1068,15 @@ function Commands(props: { context: Plugin.Context }) {
         palette: true,
         slash: { name: "session-task-move" },
         run: () => run(moveBacklogItem),
+      },
+      {
+        id: "kodradev.backlog.reorder",
+        title: "Reorder backlog task",
+        description: "Move a task to another position within its current category",
+        group: "Backlog",
+        palette: true,
+        slash: { name: "session-task-reorder" },
+        run: () => run(reorderBacklogItem),
       },
       {
         id: "kodradev.backlog.purge",
@@ -1048,6 +1159,15 @@ function Commands(props: { context: Plugin.Context }) {
         },
       },
       {
+        bind: "r",
+        title: "Reorder selected task",
+        group: "Backlog",
+        run() {
+          setBrowseAction("reorder")
+          props.context.keymap.dispatch("dialog.select.submit")
+        },
+      },
+      {
         bind: "d",
         title: "Delete selected task",
         group: "Backlog",
@@ -1087,7 +1207,17 @@ export default Plugin.define({
       },
     })
 
+    const releasePanel = context.ui.slot({
+      append: "session.panel",
+      render: (panel) => (
+        <Show when={panel.name === BACKLOG_PANEL && !!context.data.session.get(panel.sessionID)?.parentID}>
+          <BacklogPanel context={context} panel={panel} />
+        </Show>
+      ),
+    })
+
     return () => {
+      releasePanel()
       releaseSlot()
       releaseCommands()
     }
