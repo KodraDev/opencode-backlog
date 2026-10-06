@@ -270,6 +270,8 @@ npm run dev
 
 The repository-local plugin loads `dist/`; `npm run dev` rebuilds when `src/` or `skills/` changes. Other projects keep using the globally configured npm package.
 
+The local development wrapper always uses `.opencode/backlog-dev.sqlite` inside this checkout, including its own tasks, scope preferences, settings, and schema migrations. SQLite files are ignored by Git. The global npm plugin keeps using the production database described under [Storage](#storage). Switching to development does not copy or move existing production tasks; the development backlog starts empty.
+
 These commands do not run tests. Upstream tests are preserved but do not validate this fork's SQLite or scope behavior.
 
 ## License

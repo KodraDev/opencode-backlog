@@ -13,6 +13,7 @@ without explicit user authorization.
 - `src/ui-client.ts` and `src/tui.tsx`: TUI RPC client, sidebar, and dialogs.
 - `src/workflow-skill.ts` and `skills/kodradev-backlog/SKILL.md`: bundled workflow skill and minimal model-context reminder.
 - `.opencode/plugins/kodradev-backlog-dev/`: repository-local development wrappers; other projects use global npm.
+- `.opencode/backlog-dev.sqlite`: isolated development database, ignored by Git; never share or migrate production data into it implicitly.
 - `src/store.ts`: legacy upstream JSON store, not used by this fork at runtime.
 
 Scope changes select another backlog; they must not move, merge, or delete tasks.
