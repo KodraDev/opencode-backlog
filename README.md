@@ -1,51 +1,34 @@
 # KodraDev OpenCode Backlog
 
-Hybrid SQLite-backed fork of [sachahjkl/opencode-backlog](https://github.com/sachahjkl/opencode-backlog).
-Repository: [KodraDev/opencode-backlog](https://github.com/KodraDev/opencode-backlog).
-Package: `kodradev-opencode-backlog`. See [NOTICE.md](NOTICE.md) and the preserved MIT [LICENSE](LICENSE).
+A persistent session or project backlog for OpenCode V2 agents and the TUI.
 
-The upstream categories, ordering, task dialogs, keyboard actions, and sidebar
-are retained. Storage and scope resolution are different:
+The plugin gives agents tools to manage tasks and adds an interactive backlog to the sidebar and command palette.
 
-- **Session mode:** each OpenCode session has an independent TODO list.
-- **Project mode:** sessions in the same project use a shared backlog.
-- A configurable default applies when a session has no saved override.
-- The user can override the mode for one session using `/backlog-scope`.
-- Switching modes selects another backlog. It never moves or merges tasks.
-- Subagents are independent sessions by default; they do not inherit a parent's
-  override. With a project default, they share the project's backlog.
+Fork of [sachahjkl/opencode-backlog](https://github.com/sachahjkl/opencode-backlog), with SQLite storage and selectable scope.
+Package: [kodradev-opencode-backlog on npm](https://www.npmjs.com/package/kodradev-opencode-backlog).
 
-## Status
+## What It Does
 
-This is an initial development version, not a production-verified plugin.
-The original installed plugin is not replaced automatically.
-The fork targets OpenCode `2.0.23` and its native V2 plugin API.
+- **Session mode** (default): each session has its own backlog.
+- **Project mode**: sessions in the same project share a backlog.
+- Live sidebar, task details, notes, and editable categories.
+- Read-only history of stored backlogs in the project.
+- Bundled `kodradev-backlog` skill and workflow reminder; no manual `AGENTS.md` setup needed.
 
-## Build
+New backlogs start with **Todo**, **Doing**, **Blocked**, and **Done**. Categories can be renamed, styled, reordered, or removed when empty.
 
-```sh
-npm ci --ignore-scripts
-npm run typecheck:src
-npm run build
-```
+Switch scope with `/backlog-scope`. Switching selects another backlog; it never moves, merges, or deletes tasks.
 
-These commands compile production sources only; they do not run tests.
-Node.js 24+ is needed for development. The server uses OpenCode's Bun runtime
-and its built-in `bun:sqlite` driver; no native SQLite addon is installed.
+## Requirements
 
-The lockfile pins patched Seroval and brace-expansion resolutions. The last npm
-production dependency audit still reported three low-severity advisories and no
-high/critical advisories. This is not a security audit of the plugin or its host.
+- OpenCode V2; this fork targets `2.0.23`.
+- Node.js 24+ and npm for local development.
 
-Upstream test files and testing configuration are preserved unchanged. They
-still describe the original plugin and need an explicitly authorized update
-before they can validate this fork. Do not treat the upstream suite as proof
-that the new SQLite or hybrid behavior works.
+This is an early development version, not yet production-verified.
 
-## Enable when ready
+## Install
 
-Add the npm package to the global OpenCode configuration. Preserve other plugin
-entries. Remove the original `opencode-backlog` entry to avoid duplicate sidebars:
+Add the package to `~/.config/opencode/opencode.jsonc`, preserving other plugin entries:
 
 ```jsonc
 {
@@ -61,54 +44,21 @@ entries. Remove the original `opencode-backlog` entry to avoid duplicate sidebar
 }
 ```
 
-`defaultMode` accepts `session` (the default) or `project`. `/backlog-scope`
-offers both modes and **Use configured default**, which clears that session's
-override. Changing the configured default affects sessions without overrides.
+Set `defaultMode` to `project` for a shared backlog. `/backlog-scope` overrides it for one session; **Use configured default** clears that override.
 
-The package exports `./tui`, so OpenCode can load its TUI entrypoint alongside
-the server. Reopen the TUI after enabling it. This fork has separate plugin IDs,
-tool names, and commands; it can coexist with the upstream plugin during
-development, but that produces two sidebar sections and two independent stores.
+Remove the original `opencode-backlog` plugin entry to avoid duplicate sidebars. The package includes both server and TUI entrypoints. Reopen the TUI after enabling it.
 
-The plugin registers the bundled `kodradev-backlog` skill and a small context
-reminder when its tools are available. The skill explains task lifecycle,
-pagination, user-selected scope, and destructive-action boundaries. Load it with
-the skill tool when doing actionable work. Informational questions need no task.
+## Use The Backlog
 
-No global `AGENTS.md` edits or skill installation are required. Registrations
-are removed when the plugin unloads. The reminder does not inject stored tasks
-or force the full skill into every request, and it does not grant permission to
-run tests or do extra work. Remove older duplicate global backlog instructions
-after confirming this version is active.
+Ask the agent to manage tasks in normal language:
 
-## Local development
-
-This repository includes project-scoped `opencode.jsonc` and a discovered local
-plugin under `.opencode/plugins/kodradev-backlog-dev/`. The project config disables
-the normal server/TUI plugin here; distinct dev IDs load the local `dist/` build
-instead. Other project directories keep using the globally configured npm version.
-The dev wrapper is not included in the npm package.
-
-```sh
-npm ci --ignore-scripts
-npm run build
-npm run dev
+```text
+Add a Todo task to document the release process.
+Move the release task to Doing.
+Add notes explaining what remains blocked.
 ```
 
-`npm run dev` watches `src/` and `skills/`, rebuilding production sources without
-running tests. OpenCode watches imported local JavaScript files and normally
-reloads changed builds. For Markdown-only skill edits or a missed reload, use
-`opencode api post /api/location/reload` after a successful build; that reloads
-all loaded locations without stopping running sessions, but cancels pending
-permissions/forms. Reopen the TUI if its view still needs refreshing.
-
-The title remains **Backlog**; its scope is shown below it. Dev and npm variants
-use the same database by default so this session's tasks and scope preferences
-remain available when switching versions. Before experimenting with storage
-schema changes, configure a separate absolute `databasePath`. Do not run both
-variants at the same location or migrate tasks automatically.
-
-## Commands
+Click a sidebar task or select **Browse selected backlog** in the command palette to view task details.
 
 | Command | Purpose |
 | --- | --- |
@@ -120,104 +70,52 @@ variants at the same location or migrate tasks automatically.
 | `/backlog-scope` | Choose this session's scope or restore the configured default |
 | `/session-backlogs` | Read-only history of stored backlogs in this project |
 
-The sidebar shows up to eight pending tasks, counts, and a compact completed
-summary. Full notes load only when a task is opened. Loading, empty, and error
-states are distinct. RPC events refresh it; a 15-second refresh recovers from
-missed events or another OpenCode server writing to the same database.
+Deleting tasks or purging categories requires explicit user authorization.
 
-Status colors use the active OpenCode theme: Todo uses info (usually blue),
-Doing uses warning (usually amber), Blocked uses error (usually red), and Done
-uses success (usually green). Headers, icons, task rows, task-detail status,
-and the completed summary share the same category color. Labels and icons remain
-visible so status is not conveyed by color alone. Scope and action links use
-info; destructive actions use error.
+## Agent Tools
 
-Existing category colors are preserved. Customize a category's color with
-`/session-backlog-categories`; the Todo color above applies to newly created
-backlogs, not an automatic recoloring of existing data. Subdued task titles use
-the normal text color for readability while their headers and icons stay muted.
+Tools use the calling session's selected scope automatically.
 
-## Agent tools
+| Tool | Purpose |
+| --- | --- |
+| `session_backlog_list` | List tasks with category/search filters and pagination. |
+| `session_backlog_get` | Read one task with full notes. |
+| `session_backlog_add` | Add a task. |
+| `session_backlog_update` | Edit a task title or notes. |
+| `session_backlog_move` | Change a task category or position. |
+| `session_backlog_remove` | Permanently remove a task. |
+| `session_backlog_category_add` | Add a category with a stable ID, title, color, and icon. |
+| `session_backlog_category_update` | Edit a category title, color, or icon. |
+| `session_backlog_category_move` | Reorder a category. |
+| `session_backlog_category_remove` | Remove an empty category. |
+| `session_backlog_category_purge` | Permanently remove all tasks from a category. |
 
-The tools resolve the calling session automatically. They never accept an
-arbitrary session or project ID from the agent.
+## Storage
 
-- `session_backlog_list`: category/search filters, `offset`, `limit` (1–50),
-  `activeOnly`, and optional note previews. The default page size is 20.
-- `session_backlog_get`: one task with its full notes.
-- `session_backlog_add`, `session_backlog_update`, `session_backlog_move`,
-  `session_backlog_remove`.
-- `session_backlog_category_add`, `session_backlog_category_update`,
-  `session_backlog_category_move`, `session_backlog_category_remove`,
-  `session_backlog_category_purge`.
-
-List responses identify their `mode` and `boardID`. In session mode, another
-session's isolated tasks are inaccessible through these tools. In project mode,
-sharing is intentional. Removing tasks and purging categories are destructive;
-agent instructions must require explicit authorization.
-
-## SQLite and size management
-
-One database holds normalized backlogs, categories, tasks, and per-session mode
-preferences. Defaults:
+Tasks, categories, and scope preferences persist in SQLite on the OpenCode server:
 
 ```text
 ~/.local/share/opencode/kodradev-opencode-backlog/backlog.sqlite
 $XDG_DATA_HOME/opencode/kodradev-opencode-backlog/backlog.sqlite   (when XDG_DATA_HOME is set)
 ```
 
-An optional absolute `databasePath` in server plugin options overrides this.
-The TUI talks to the server over RPC and never opens a local database, so it can
-work against an authenticated remote OpenCode service.
+Set an absolute `databasePath` in plugin options to use another location. The TUI accesses storage through RPC, including when connected to a remote server.
 
-- Session backlog keys derive from the real OpenCode session ID.
-- Project backlog keys use the OpenCode project ID. Non-Git locations use a
-  normalized-directory hash so unrelated non-Git directories do not share one
-  global backlog. Git worktrees belonging to the same project share its backlog.
-- Writes use SQLite transactions, foreign keys, WAL, a busy timeout, and schema
-  versioning. A failed write rolls back as a whole.
-- Dialog writes require the same backlog identity and revision they loaded.
-  Concurrent edits or scope changes reject stale writes rather than overwriting
-  another agent's work.
-- Each backlog is limited to 1,000 tasks and 32 categories. Titles are limited
-  to 240 characters and notes to 16 KiB of UTF-8 data per task.
-- List output omits notes by default; optional previews are at most 512
-  characters. Full notes are available through `session_backlog_get`.
-- No conversations, attachments, or unbounded mutation history are stored.
+Existing upstream `BACKLOG.json` files are not imported or modified. Backlogs are retained until explicitly cleared; there is no automatic cleanup.
 
-These limits bound individual backlogs and responses, **not total disk usage**:
-retained backlogs accumulate. There is no automatic deletion, retention policy,
-or archival/compaction command in this first version. WAL checkpoints do not
-remove retained tasks or reclaim all previously allocated database pages.
-Explicit export, archival, disk statistics, and maintenance are future work.
+## Development
 
-Existing `BACKLOG.json` files are neither imported nor modified. The original
-JSON store implementation remains as upstream reference code; neither the fork
-server nor its TUI uses it.
+```sh
+npm ci --ignore-scripts
+npm run typecheck:src
+npm run build
+npm run dev
+```
 
-## Development boundaries
+The repository-local plugin loads `dist/`; `npm run dev` rebuilds when `src/` or `skills/` changes. Other projects keep using the globally configured npm package.
 
-### npm releases
+These commands do not run tests. Upstream tests are preserved but do not validate this fork's SQLite or scope behavior.
 
-`.github/workflows/publish.yml` publishes new versions on pushes to `main` and
-supports manual dispatch from `main`. It uses GitHub-hosted runners, Node.js 24,
-and npm Trusted Publishing (OIDC); no `NPM_TOKEN` secret is needed.
+## License
 
-In npm package settings, authorize organization `KodraDev`, repository
-`opencode-backlog`, and workflow filename `publish.yml`, with no environment name.
-Enable direct `npm publish`, not only staged publishing, for fully automatic
-releases. The workflow typechecks and builds production sources without running
-tests, checks package contents, and skips versions already on npm. Registry
-failures stop publication instead of being treated as a missing version.
-
-Increase `package.json` and the lockfile version before each release. npm versions
-cannot be overwritten. Release jobs are serialized to avoid concurrent publishes.
-The original upstream `ci.yml` is preserved separately; it is not invoked by this
-release workflow. `[skip ci]` commits skip push workflows, but the publish workflow
-can still be dispatched manually.
-
-- `origin` points to KodraDev/opencode-backlog; `upstream` points to sachahjkl/opencode-backlog.
-- No global OpenCode configuration or installed upstream plugin is changed by building.
-- Keep attribution. Do not push this variant to upstream accidentally.
-- Functional SQLite/RPC validation and visual TUI validation remain necessary
-  before treating this development version as production-ready.
+MIT. Original attribution is preserved in [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
