@@ -212,7 +212,7 @@ export default Plugin.define({
     await context.tool.transform((tools) => {
       tools.add({
         name: "session_backlog_list",
-        description: "List TODO tasks in this session's selected backlog (session-isolated or project-shared). Scope is chosen by the user. Results are paginated; notes are omitted by default.",
+        description: "List tasks in this session's selected backlog (session-isolated or project-shared). Review before work and list doing tasks on resume or after compaction. Scope is chosen by the user. Results are paginated; notes are omitted by default and includeNotes returns previews. Use session_backlog_get for full context.",
         input: {
           type: "object",
           properties: {
@@ -237,7 +237,7 @@ export default Plugin.define({
 
       tools.add({
         name: "session_backlog_get",
-        description: "Read one task, including full notes, from the selected backlog. Other sessions' isolated backlogs cannot be accessed.",
+        description: "Read one task, including its full description and continuation checkpoint in notes, from the selected backlog. Read relevant doing tasks before resuming after compaction and read full notes before replacing partial or unfamiliar content. Other sessions' isolated backlogs cannot be accessed.",
         input: idInput,
         options: { codemode: false },
         execute: async (input, toolContext) => {
@@ -251,12 +251,12 @@ export default Plugin.define({
 
       tools.add({
         name: "session_backlog_add",
-        description: "Add a task at a zero-based position within a backlog category.",
+        description: "Add a task at a zero-based position within a backlog category. Use an actionable title; non-trivial tasks require notes with objective, scope/constraints, completion criteria, progress, next step, and relevant decisions/blockers. Simple one-step tasks may omit notes.",
         input: {
           type: "object",
           properties: {
-            title: { type: "string", minLength: 1 },
-            notes: { type: "string" },
+            title: { type: "string", minLength: 1, description: "Concise action and target." },
+            notes: { type: "string", description: "Task description and continuation checkpoint. Required by workflow for non-trivial work: objective, scope/constraints, completion criteria, progress, next step, and relevant decisions/blockers." },
             status: { type: "string", minLength: 1 },
             position: { type: "integer", minimum: 0 },
           },
@@ -294,13 +294,13 @@ export default Plugin.define({
 
       tools.add({
         name: "session_backlog_update",
-        description: "Change a backlog task title or notes. Use null notes to remove them.",
+        description: "Change a backlog task title or replace its notes. Save progress, decisions/blockers, and next step at milestones and before planned compaction. Preserve relevant objective, constraints, completion criteria, and existing context; read full notes first if needed. Use null notes to remove them.",
         input: {
           type: "object",
           properties: {
             id: { type: "string", minLength: 1 },
-            title: { type: "string", minLength: 1 },
-            notes: { type: ["string", "null"] },
+            title: { type: "string", minLength: 1, description: "Concise action and target." },
+            notes: { type: ["string", "null"], description: "Complete replacement description/checkpoint, not an append. Preserve relevant context and update actual progress and next step. Null removes notes." },
           },
           required: ["id"],
           additionalProperties: false,
