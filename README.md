@@ -129,6 +129,14 @@ Custom category IDs are supported too. The pending-task preview excludes IDs `do
 
 The sidebar is a preview, not the full backlog. **No pending tasks** does not mean completed or cancelled tasks have been deleted.
 
+**Add**, **Browse**, and **Reorder** are compact buttons with horizontal padding
+and a subtle raised background that brightens on hover. Other actions use bold,
+muted text without a button background or underline, brightening on hover.
+Scope information remains plain muted text. Padding around the backlog and
+spacing between rows keep controls separate from the task list. Category colors
+still convey task status; destructive actions use the theme's error color. No
+colors are hardcoded, so these treatments follow the active OpenCode theme.
+
 ### Subagent Backlog Panel
 
 OpenCode hides its standard sidebar in child sessions. The plugin opens its own

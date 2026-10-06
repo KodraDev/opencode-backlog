@@ -108,20 +108,21 @@ function BacklogView(props: { context: Plugin.Context; sessionID: string; showCo
   }
 
   return (
-    <box>
+    <box paddingTop={1} paddingBottom={1} gap={1}>
       <box flexDirection="row" justifyContent="space-between" gap={1}>
         <text fg={theme().text.base}><b>Backlog</b></text>
-        <text fg={theme().text.action.primary.base} onMouseUp={() => perform(manageSettings)}>Settings</text>
+        <ActionControl context={props.context} label="Settings" run={() => perform(manageSettings)} />
       </box>
-      <box flexDirection="row" gap={2}>
-        <text fg={theme().text.action.primary.base} onMouseUp={() => perform(addBacklogItem)}>Add</text>
-        <text fg={theme().text.action.primary.base} onMouseUp={() => perform(browseBacklog)}>Browse</text>
-        <text fg={theme().text.action.primary.base} onMouseUp={() => perform(reorderBacklogItem)}>Reorder</text>
+      <box flexDirection="row" flexWrap="wrap" gap={2}>
+        <ActionControl context={props.context} variant="button" label="Add" run={() => perform(addBacklogItem)} />
+        <ActionControl context={props.context} variant="button" label="Browse" run={() => perform(browseBacklog)} />
+        <ActionControl context={props.context} variant="button" label="Reorder" run={() => perform(reorderBacklogItem)} />
       </box>
       <Show when={page()}>
-        <text fg={theme().text.action.primary.base} onMouseUp={() => perform(chooseScope)}>
-          {page()?.mode === "project" ? "Shared project" : "Only this session"} · change scope
-        </text>
+        <box flexDirection="row" flexWrap="wrap" gap={2}>
+          <text fg={theme().text.muted}>{page()?.mode === "project" ? "Shared project" : "Only this session"}</text>
+          <ActionControl context={props.context} label="Change scope" run={() => perform(chooseScope)} />
+        </box>
       </Show>
       <Show when={snapshot.loading && !page()}><text fg={theme().text.muted}>Loading tasks…</text></Show>
       <Show when={error()}>
@@ -135,7 +136,7 @@ function BacklogView(props: { context: Plugin.Context; sessionID: string; showCo
           const items = createMemo(() => page()?.items.filter((item) => item.status === category.id) ?? [])
           const color = () => categoryColor(props.context, category)
           return (
-            <box marginTop={1}>
+            <box>
               <text fg={color()}>
                 <b>{category.title}</b> ({page()?.counts[category.id] ?? 0})
               </text>
@@ -161,17 +162,18 @@ function BacklogView(props: { context: Plugin.Context; sessionID: string; showCo
         }}
       </For>
       <Show when={(page()?.total ?? 0) > 8}>
-        <text fg={theme().text.action.primary.base} onMouseUp={() => perform(browseBacklog)}>
-          +{(page()?.total ?? 0) - 8} pending · {props.showCommandHints === false ? "browse all" : "/session-tasks"}
-        </text>
+        <box flexDirection="row" flexWrap="wrap" gap={1}>
+          <text fg={theme().text.muted}>+{(page()?.total ?? 0) - 8} pending ·</text>
+          <ActionControl context={props.context} label={props.showCommandHints === false ? "browse all" : "/session-tasks"} run={() => perform(browseBacklog)} />
+        </box>
       </Show>
       <Show when={(page()?.counts.done ?? 0) > 0}>
-        <text
-          fg={categoryColor(props.context, page()?.categories.find(({ id }) => id === "done") ?? { id: "done", title: "Done" })}
-          onMouseUp={() => perform(browseBacklog)}
-        >
-          ✓ {page()?.counts.done} completed · {props.showCommandHints === false ? "browse all" : "/session-tasks"}
-        </text>
+        <box flexDirection="row" flexWrap="wrap" gap={1}>
+          <text fg={categoryColor(props.context, page()?.categories.find(({ id }) => id === "done") ?? { id: "done", title: "Done" })}>
+            ✓ {page()?.counts.done} completed ·
+          </text>
+          <ActionControl context={props.context} label={props.showCommandHints === false ? "browse all" : "/session-tasks"} run={() => perform(browseBacklog)} />
+        </box>
       </Show>
     </box>
   )
@@ -190,9 +192,7 @@ function BacklogPanel(props: { context: Plugin.Context; panel: PanelInput }) {
   return (
     <box height="100%" minHeight={0} padding={1} gap={1}>
       <box flexDirection="row" justifyContent="flex-end" gap={2} flexShrink={0}>
-        <text fg={props.context.theme.text.action.primary.base} onMouseUp={props.panel.toggleFullscreen}>
-          {props.panel.presentation === "fullscreen" ? "Restore" : "Fullscreen"}
-        </text>
+        <ActionControl context={props.context} label={props.panel.presentation === "fullscreen" ? "Restore" : "Fullscreen"} run={props.panel.toggleFullscreen} />
       </box>
       <scrollbox flexGrow={1} minHeight={0} horizontalScrollbarOptions={{ visible: false }}>
         <BacklogView context={props.context} sessionID={props.panel.sessionID} showCommandHints={false} />
@@ -208,19 +208,27 @@ function taskDetails(item: BacklogItem, categories: readonly Category[]): string
   return [`Category: ${categoryTitle(categories, item.status)}`, `ID: ${item.id}`, "", item.notes ?? "No notes"].join("\n")
 }
 
-function TaskAction(props: {
+function ActionControl(props: {
   context: Plugin.Context
-  shortcut: string
+  variant?: "button" | "text"
+  shortcut?: string
   label: string
   danger?: boolean
-  run: () => void
+  run: () => void | Promise<void>
 }) {
+  const [hovered, setHovered] = createSignal(false)
+  const button = () => props.variant === "button"
   return (
     <text
-      fg={props.danger ? props.context.theme.text.action.destructive.base : props.context.theme.text.action.primary.base}
+      fg={props.danger ? props.context.theme.text.feedback.error.base : button() || hovered() ? props.context.theme.text.base : props.context.theme.text.muted}
+      bg={button() ? hovered() ? props.context.theme.background.raised.max : props.context.theme.background.raised.high : "transparent"}
+      flexShrink={0}
+      wrapMode="none"
+      onMouseOver={() => setHovered(true)}
+      onMouseOut={() => setHovered(false)}
       onMouseUp={props.run}
     >
-      <b>{props.shortcut}</b> {props.label}
+      {button() ? " " : ""}<b>{props.shortcut ? `${props.shortcut} ` : ""}{props.label}</b>{button() ? " " : ""}
     </text>
   )
 }
@@ -259,9 +267,7 @@ function TaskDetailsDialog(props: { context: Plugin.Context; item: BacklogItem; 
         <text fg={props.context.theme.text.base} wrapMode="word" flexGrow={1}>
           <b>{props.item.title}</b>
         </text>
-        <text fg={props.context.theme.text.muted} onMouseUp={() => props.context.ui.dialog.clear()}>
-          esc
-        </text>
+        <ActionControl context={props.context} label="esc" run={() => props.context.ui.dialog.clear()} />
       </box>
       <text fg={categoryColor(props.context, category())}>
         {categoryIcon(category())} <b>{category().title}</b>
@@ -272,11 +278,11 @@ function TaskDetailsDialog(props: { context: Plugin.Context; item: BacklogItem; 
       <text fg={props.context.theme.text.base} wrapMode="word">
         {props.item.notes ?? "No notes"}
       </text>
-      <box flexDirection="row" justifyContent="flex-end" gap={2} paddingBottom={1}>
-        <TaskAction context={props.context} shortcut="c" label="status" run={changeStatus} />
-        <TaskAction context={props.context} shortcut="r" label="reorder" run={reorder} />
-        <TaskAction context={props.context} shortcut="e" label="edit" run={edit} />
-        <TaskAction context={props.context} shortcut="d" label="delete" danger run={remove} />
+      <box flexDirection="row" flexWrap="wrap" justifyContent="flex-end" gap={1} paddingBottom={1}>
+        <ActionControl context={props.context} shortcut="c" label="status" run={changeStatus} />
+        <ActionControl context={props.context} shortcut="r" label="reorder" run={reorder} />
+        <ActionControl context={props.context} shortcut="e" label="edit" run={edit} />
+        <ActionControl context={props.context} shortcut="d" label="delete" danger run={remove} />
       </box>
     </box>
   )
@@ -821,12 +827,12 @@ function TaskDetailDialog(props: { context: Plugin.Context; current: TaskDetail;
     <box paddingLeft={2} paddingRight={2} paddingBottom={1} gap={1}>
       <box flexDirection="row" justifyContent="space-between" gap={1}>
         <text fg={props.context.theme.text.base}><b>Task detail</b></text>
-        <text fg={props.context.theme.text.muted} onMouseUp={() => props.context.ui.dialog.clear()}>esc</text>
+        <ActionControl context={props.context} label="esc" run={() => props.context.ui.dialog.clear()} />
       </box>
       <For each={options}>
         {(option) => (
           <box gap={1} minWidth={0} onMouseUp={() => props.choose(option.value)}>
-            <text fg={props.context.theme.text.action.primary.base} wrapMode="word">
+            <text fg={props.context.theme.text.base} wrapMode="word">
               <b>{props.current === option.value ? "●" : "○"} {option.shortcut} {option.title}</b>
               {props.current === option.value ? " · current" : ""}
             </text>
