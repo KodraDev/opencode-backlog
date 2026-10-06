@@ -1,6 +1,6 @@
 {
   "name": "kodradev-opencode-backlog",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "SQLite-backed hybrid project/session backlog tools and sidebar for OpenCode 2",
   "type": "module",
   "publishConfig": {
@@ -24,12 +24,14 @@
   },
   "files": [
     "dist",
+    "skills",
     "README.md",
     "LICENSE",
     "NOTICE.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node script/build-tui.mjs",
+    "dev": "node script/dev.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "typecheck:src": "tsc -p tsconfig.build.json --noEmit",
     "prepack": "npm run build",

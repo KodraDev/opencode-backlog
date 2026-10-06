@@ -28,6 +28,7 @@ import {
 } from "./input.js"
 import { LIMITS, pageInteger, SessionStore, type PageOptions, type ScopeMode, type SessionScope } from "./session-store.js"
 import { SessionBacklog } from "./session-rpc.js"
+import { registerWorkflowSkill } from "./workflow-skill.js"
 
 const runtimes = new WeakMap<Plugin.Context, {
   store: SessionStore
@@ -502,6 +503,7 @@ export default Plugin.define({
         },
       })
     })
+      await registerWorkflowSkill(context)
       return () => { runtimes.delete(context); store.close() }
     } catch (error) {
       runtimes.delete(context)

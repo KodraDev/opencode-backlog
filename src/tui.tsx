@@ -104,7 +104,7 @@ function BacklogView(props: { context: Plugin.Context; sessionID: string }) {
   return (
     <box>
       <text fg={theme.text.default}>
-        <b>{page()?.mode === "project" ? "Project backlog" : "Session TODO"}</b>
+        <b>Backlog</b>
       </text>
       <Show when={page()}>
         <text fg={theme.text.feedback.info.default} onMouseUp={() => perform(chooseScope)}>
@@ -252,7 +252,7 @@ function backlogLocation(context: Plugin.Context): { directory: string; path: Ba
   const captured = pinned.get(context)
   if (captured) return { directory: captured.directory, path: captured }
   const route = context.ui.router.current()
-  if (route.type !== "session") throw new Error("Open a session before using its TODO list")
+  if (route.type !== "session") throw new Error("Open a session before using Backlog")
   const path = sessionAccess(context, route.sessionID)
   return { directory: path.directory, path }
 }
@@ -599,13 +599,13 @@ async function browseBacklogWithState(
   while (true) {
     const page = await listBacklog(path, { offset, limit: 20 })
     if (page.total === 0) {
-      await context.ui.dialog.alert({ title: "Session TODO", message: "No tasks" })
+      await context.ui.dialog.alert({ title: "Backlog", message: "No tasks" })
       return
     }
     if (offset >= page.total) { offset = Math.floor((page.total - 1) / 20) * 20; continue }
     setOpen(!readonly)
     const id = await context.ui.dialog.select({
-      title: `${readonly ? "Backlog history" : page.mode === "project" ? "Project backlog" : "Session TODO"} · ${offset + 1}–${offset + page.items.length} of ${page.total}`,
+      title: `${readonly ? "Backlog history" : "Backlog"} · ${offset + 1}–${offset + page.items.length} of ${page.total}`,
       placeholder: "Select a task",
       options: [
         ...page.items.map((item) => ({ title: item.title, value: item.id, category: categoryTitle(page.categories, item.status) })),
@@ -672,8 +672,8 @@ async function chooseScope(context: Plugin.Context): Promise<void> {
     title: "Backlog scope for this session",
     current: page.mode,
     options: [
-      { title: "Session TODO", value: "session", description: "An isolated list for this session" },
-      { title: "Project backlog", value: "project", description: "Shared with sessions in this project" },
+      { title: "Session", value: "session", description: "An isolated backlog for this session" },
+      { title: "Project", value: "project", description: "Shared with sessions in this project" },
       { title: "Use configured default", value: "default", description: "Remove this session's override" },
     ],
   })

@@ -52,7 +52,7 @@ entries. Remove the original `opencode-backlog` entry to avoid duplicate sidebar
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      "package": "kodradev-opencode-backlog@0.1.0",
+      "package": "kodradev-opencode-backlog@0.1.1",
       "options": {
         "defaultMode": "session"
       }
@@ -70,17 +70,43 @@ the server. Reopen the TUI after enabling it. This fork has separate plugin IDs,
 tool names, and commands; it can coexist with the upstream plugin during
 development, but that produces two sidebar sections and two independent stores.
 
-After enabling this fork, update agent instructions to use `session_backlog_*`
-instead of the original `backlog_*` tools. Configuration alone does not make
-agents follow a mandatory TODO workflow. A suggested rule is:
+The plugin registers the bundled `kodradev-backlog` skill and a small context
+reminder when its tools are available. The skill explains task lifecycle,
+pagination, user-selected scope, and destructive-action boundaries. Load it with
+the skill tool when doing actionable work. Informational questions need no task.
 
-```md
-Use session_backlog_* for every task that requires actions. Review the selected
-backlog first, reuse relevant tasks, and track todo → doing → done accurately.
-Use blocked with explanatory notes when work cannot continue. Respect the
-user-selected scope; do not change it or delete tasks without authorization.
-Purely informational questions do not require tasks.
+No global `AGENTS.md` edits or skill installation are required. Registrations
+are removed when the plugin unloads. The reminder does not inject stored tasks
+or force the full skill into every request, and it does not grant permission to
+run tests or do extra work. Remove older duplicate global backlog instructions
+after confirming this version is active.
+
+## Local development
+
+This repository includes project-scoped `opencode.jsonc` and a discovered local
+plugin under `.opencode/plugins/kodradev-backlog-dev/`. The project config disables
+the normal server/TUI plugin here; distinct dev IDs load the local `dist/` build
+instead. Other project directories keep using the globally configured npm version.
+The dev wrapper is not included in the npm package.
+
+```sh
+npm ci --ignore-scripts
+npm run build
+npm run dev
 ```
+
+`npm run dev` watches `src/` and `skills/`, rebuilding production sources without
+running tests. OpenCode watches imported local JavaScript files and normally
+reloads changed builds. For Markdown-only skill edits or a missed reload, use
+`opencode api post /api/location/reload` after a successful build; that reloads
+all loaded locations without stopping running sessions, but cancels pending
+permissions/forms. Reopen the TUI if its view still needs refreshing.
+
+The title remains **Backlog**; its scope is shown below it. Dev and npm variants
+use the same database by default so this session's tasks and scope preferences
+remain available when switching versions. Before experimenting with storage
+schema changes, configure a separate absolute `databasePath`. Do not run both
+variants at the same location or migrate tasks automatically.
 
 ## Commands
 

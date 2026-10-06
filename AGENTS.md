@@ -11,6 +11,8 @@ without explicit user authorization.
 - `src/index.ts`: agent tools, automatic scope resolution, and server RPC.
 - `src/session-rpc.ts`: shared portable RPC contract; do not import server storage here.
 - `src/ui-client.ts` and `src/tui.tsx`: TUI RPC client, sidebar, and dialogs.
+- `src/workflow-skill.ts` and `skills/kodradev-backlog/SKILL.md`: bundled workflow skill and minimal model-context reminder.
+- `.opencode/plugins/kodradev-backlog-dev/`: repository-local development wrappers; other projects use global npm.
 - `src/store.ts`: legacy upstream JSON store, not used by this fork at runtime.
 
 Scope changes select another backlog; they must not move, merge, or delete tasks.
