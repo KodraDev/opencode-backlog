@@ -1,12 +1,17 @@
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { Skill, type Plugin } from "@opencode/plugin"
+import { LIGHTWEIGHT_NOTES_MAX, type TaskDetail } from "./settings.js"
 
 const ID = "kodradev-backlog"
-const REMINDER = "For actionable work, load the kodradev-backlog skill and first review session_backlog_list. Reuse tasks; track todo → doing → done truthfully. Non-trivial tasks require actionable titles and notes with objective, scope/constraints, completion criteria, progress, next step, and relevant decisions/blockers. Update notes at milestones and before planned compaction. On resume or after compaction, list doing tasks and read relevant full notes with session_backlog_get before acting. Respect selected scope; deletion requires authorization. Informational questions need no task."
-const COMPACTION_REMINDER = "Preserve backlog continuity in the summary: include known relevant task IDs, selected scope, current progress, decisions/blockers, and next step. Do not invent task data or claim notes were saved without a successful tool result. On resume, instruct the agent to review session_backlog_list and read relevant doing tasks with session_backlog_get; list notes may be truncated and the summary is not a substitute for persisted notes. Do not change scope or duplicate tasks."
+const REMINDER = "Backlog: actionable work only. List first; reuse tasks; todo → doing → done truthfully. One small step per task, short title; no duplicated plan. Resume: list and read relevant Doing tasks. Respect scope; deletion needs user authorization."
+const DETAILS: Record<TaskDetail, string> = {
+  lightweight: `Lightweight mode: every new task needs notes with one short description (max ${LIGHTWEIGHT_NOTES_MAX} characters). Keep only essential context; no repeated plan or progress log. Do not load the workflow skill unless needed.`,
+  detailed: "Detailed mode: brief notes for complex tasks: objective, scope/constraints, completion criteria, progress, next step, blockers. One short line per field; update only meaningful changes or handoffs, never append logs.",
+}
+const COMPACTION_REMINDER = "Preserve relevant task IDs, scope, blocker and next step. Claim saved notes only after successful writes. Resume: list backlog and read Doing tasks; do not duplicate tasks or change scope."
 
-export async function registerWorkflowSkill(context: Plugin.Context): Promise<void> {
+export async function registerWorkflowSkill(context: Plugin.Context, taskDetail: () => TaskDetail): Promise<void> {
   const path = fileURLToPath(new URL("../skills/kodradev-backlog/SKILL.md", import.meta.url))
   const content = readFileSync(path, "utf8").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "")
   await context.skill.transform((editor) => {
@@ -21,8 +26,9 @@ export async function registerWorkflowSkill(context: Plugin.Context): Promise<vo
   })
   await context.session.hook("context", (event) => {
     if (!Object.hasOwn(event.tools, "session_backlog_list")) return
-    if (event.system.some((part) => part.type === "text" && part.text === REMINDER)) return
-    event.system.push({ type: "text", text: REMINDER })
+    const reminder = `${REMINDER} ${DETAILS[taskDetail()]}`
+    if (event.system.some((part) => part.type === "text" && part.text === reminder)) return
+    event.system.push({ type: "text", text: reminder })
   })
   await context.session.hook("compaction", (event) => {
     if (!Object.hasOwn(event.tools, "session_backlog_list")) return

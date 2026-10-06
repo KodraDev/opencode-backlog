@@ -3,6 +3,9 @@ import type { RpcClient } from "@opencode/client/promise/api"
 import { parseBacklog, type Backlog } from "./backlog.js"
 import { SessionBacklog } from "./session-rpc.js"
 import type { BacklogPage, PageOptions, Snapshot, StoredSession } from "./session-store.js"
+import type { BacklogSettings, SettingsScope, SettingsSnapshot } from "./settings.js"
+
+export type SettingsAccess = Pick<BacklogAccess, "client" | "directory">
 
 export interface BacklogAccess {
   sessionID: string
@@ -53,4 +56,14 @@ export async function listBacklog(access: BacklogAccess, options: PageOptions = 
 
 export async function listSessions(access: BacklogAccess, offset: number): Promise<{ items: StoredSession[]; total: number }> {
   return await access.client.sessions({ offset, limit: 20 }, { location: { directory: access.directory } }) as { items: StoredSession[]; total: number }
+}
+
+export async function readSettings(access: SettingsAccess): Promise<SettingsSnapshot> {
+  return await access.client.settings({}, { location: { directory: access.directory } }) as SettingsSnapshot
+}
+
+export async function saveSettings(access: SettingsAccess, scope: SettingsScope, previous: SettingsSnapshot, settings: BacklogSettings | null): Promise<SettingsSnapshot> {
+  const level = scope === "global" ? previous.global : previous.project
+  return await access.client.setSettings({ expectedProjectID: previous.projectID, scope, revision: level.revision, settings },
+    { location: { directory: access.directory } }) as SettingsSnapshot
 }

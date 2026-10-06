@@ -3,6 +3,9 @@ import { mkdirSync } from "node:fs"
 import { dirname, isAbsolute, join } from "node:path"
 import { homedir } from "node:os"
 import { EMPTY_BACKLOG, parseBacklog, type Backlog, type BacklogItem, type Category } from "./backlog.js"
+import { DAY_MS, parseBacklogSettings, parseLightweightNotes, type BacklogSettings, type SettingsLevel, type SettingsScope, type SettingsSnapshot, type TaskDetail } from "./settings.js"
+
+export { parseRetentionDays } from "./settings.js"
 
 export const LIMITS = {
   tasks: 1000,
@@ -13,11 +16,18 @@ export const LIMITS = {
   page: 50,
 } as const
 
+export const MAINTENANCE_INTERVAL = DAY_MS
+const ACCESS_INTERVAL = 60 * 60 * 1000
+const RETENTION_BATCH = 100
+export const GLOBAL_SETTINGS_ID = "global"
+
 export interface SessionScope {
   sessionID: string
   boardID: string
   mode: ScopeMode
   defaultMode: ScopeMode
+  settingsRevision?: { global: number; project: number }
+  taskDetail?: TaskDetail
   projectID: string
   directory: string
   title: string
@@ -106,7 +116,7 @@ export class SessionStore {
       this.db.run("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA wal_autocheckpoint = 1000;")
       this.db.transaction(() => {
         const version = this.db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0
-        if (version > 1) throw new Error(`Unsupported session backlog schema ${version}; upgrade the plugin`)
+        if (version > 3) throw new Error(`Unsupported session backlog schema ${version}; upgrade the plugin`)
         if (version === 0) {
           this.db.run(`
             CREATE TABLE backlogs (
@@ -133,6 +143,35 @@ export class SessionStore {
             PRAGMA user_version = 1;
           `)
         }
+        if (version < 2) {
+          this.db.run(`
+            ALTER TABLE backlogs ADD COLUMN last_accessed_at INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE session_preferences ADD COLUMN project_id TEXT;
+            ALTER TABLE session_preferences ADD COLUMN last_accessed_at INTEGER NOT NULL DEFAULT 0;
+            CREATE INDEX backlogs_retention ON backlogs(project_id, mode, last_accessed_at, id);
+            CREATE INDEX preferences_retention ON session_preferences(project_id, last_accessed_at);
+            CREATE TABLE maintenance_runs (key TEXT PRIMARY KEY, ran_at INTEGER NOT NULL);
+            PRAGMA user_version = 2;
+          `)
+          // Give existing data a full retention window instead of expiring it on upgrade.
+          const now = Date.now()
+          this.db.query("UPDATE backlogs SET last_accessed_at = ?").run(now)
+          this.db.query(`
+            UPDATE session_preferences SET last_accessed_at = ?, project_id = (
+              SELECT project_id FROM backlogs WHERE id = 'session:' || session_preferences.session_id
+            )
+          `).run(now)
+        }
+        if (version < 3) {
+          this.db.run(`
+            CREATE TABLE project_settings (
+              project_id TEXT PRIMARY KEY, revision INTEGER NOT NULL,
+              default_mode TEXT CHECK(default_mode IN ('session', 'project')),
+              retention_days INTEGER, task_detail TEXT CHECK(task_detail IN ('lightweight', 'detailed'))
+            );
+            PRAGMA user_version = 3;
+          `)
+        }
       }).immediate()
     } catch (error) {
       this.db.close()
@@ -144,9 +183,116 @@ export class SessionStore {
     return this.db.query<{ mode: ScopeMode }, [string]>("SELECT mode FROM session_preferences WHERE session_id = ?").get(sessionID)?.mode ?? fallback
   }
 
+  private readLevel(rowKey: string, parent: BacklogSettings): SettingsLevel {
+    const row = this.db.query<{
+      revision: number; default_mode: ScopeMode | null; retention_days: number | null; task_detail: BacklogSettings["taskDetail"] | null
+    }, [string]>("SELECT revision, default_mode, retention_days, task_detail FROM project_settings WHERE project_id = ?").get(rowKey)
+    const override = row && (row.default_mode !== null || row.retention_days !== null || row.task_detail !== null)
+      ? {
+          defaultMode: row.default_mode ?? parent.defaultMode,
+          retentionDays: row.retention_days ?? parent.retentionDays,
+          taskDetail: row.task_detail ?? parent.taskDetail,
+        }
+      : null
+    return { revision: row?.revision ?? 0, override, settings: override ?? parent }
+  }
+
+  settings(projectID: string, defaults: BacklogSettings): SettingsSnapshot {
+    const global = this.readLevel(GLOBAL_SETTINGS_ID, defaults)
+    return {
+      projectID, defaults, global,
+      // Project settings inherit global values until this project stores its own override.
+      project: this.readLevel(projectID, global.settings),
+    }
+  }
+
+  setSettings(projectID: string, scope: SettingsScope, settings: BacklogSettings | null, defaults: BacklogSettings, expectedRevision: number): SettingsSnapshot {
+    const rowKey = scope === "global" ? GLOBAL_SETTINGS_ID : projectID
+    const next = settings === null ? null : parseBacklogSettings(settings)
+    return this.db.transaction(() => {
+      const previous = this.settings(projectID, defaults)
+      const level = scope === "global" ? previous.global : previous.project
+      if (level.revision !== expectedRevision) throw new Error("Backlog settings changed while this dialog was open. Reopen it and try again.")
+      // Retain the revision when resetting, so stale dialogs cannot overwrite newer settings.
+      this.db.query(`
+        INSERT INTO project_settings(project_id, revision, default_mode, retention_days, task_detail) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(project_id) DO UPDATE SET revision = excluded.revision, default_mode = excluded.default_mode,
+          retention_days = excluded.retention_days, task_detail = excluded.task_detail
+      `).run(rowKey, level.revision + 1, next?.defaultMode ?? null, next?.retentionDays ?? null, next?.taskDetail ?? null)
+      return this.settings(projectID, defaults)
+    }).immediate()
+  }
+
   setMode(sessionID: string, mode: ScopeMode | null): void {
     if (mode === null) this.db.query("DELETE FROM session_preferences WHERE session_id = ?").run(sessionID)
-    else this.db.query("INSERT INTO session_preferences(session_id, mode) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET mode = excluded.mode").run(sessionID, mode)
+    else this.db.query(`
+      INSERT INTO session_preferences(session_id, mode, last_accessed_at) VALUES (?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET mode = excluded.mode, last_accessed_at = excluded.last_accessed_at
+    `).run(sessionID, mode, Date.now())
+  }
+
+  private touch(boardID: string, now = Date.now()): void {
+    this.db.query("UPDATE backlogs SET last_accessed_at = ? WHERE id = ? AND last_accessed_at < ?")
+      .run(now, boardID, now - ACCESS_INTERVAL)
+  }
+
+  access(sessionID: string, projectID: string, boardID: string): void {
+    const now = Date.now()
+    this.db.transaction(() => {
+      this.touch(boardID, now)
+      this.db.query(`
+        UPDATE session_preferences SET project_id = ?, last_accessed_at = ?
+        WHERE session_id = ? AND (project_id IS NOT ? OR last_accessed_at < ?)
+      `).run(projectID, now, sessionID, projectID, now - ACCESS_INTERVAL)
+    }).immediate()
+  }
+
+  private claimMaintenance(key: string, now: number): boolean {
+    return this.db.query(`
+      INSERT INTO maintenance_runs(key, ran_at) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET ran_at = excluded.ran_at
+      WHERE maintenance_runs.ran_at <= ?
+    `).run(key, now, now - MAINTENANCE_INTERVAL).changes > 0
+  }
+
+  maintain(projectID: string, defaults: BacklogSettings): void {
+    const now = Date.now()
+    this.db.transaction(() => {
+      // Resolve inherited project settings under the same write lock as deletion, so a saved change cannot race cleanup.
+      const retentionDays = this.settings(projectID, defaults).project.settings.retentionDays
+      if (retentionDays === 0 || !this.claimMaintenance(`retention:${projectID}`, now)) return
+      // Include the touch interval so throttled access writes cannot expire a recently read board.
+      const cutoff = now - retentionDays * MAINTENANCE_INTERVAL - ACCESS_INTERVAL
+      this.db.query(`
+        DELETE FROM backlogs WHERE id IN (
+          SELECT b.id FROM backlogs b
+          WHERE b.project_id = ? AND b.mode = 'session' AND b.last_accessed_at < ? AND b.updated_at < ?
+            AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.board_id = b.id AND t.status NOT IN ('done', 'cancelled'))
+          ORDER BY b.last_accessed_at, b.id LIMIT ?
+        )
+      `).run(projectID, cutoff, cutoff, RETENTION_BATCH)
+      // Expire unused overrides only when no isolated backlog still depends on them.
+      this.db.query(`
+        DELETE FROM session_preferences WHERE session_id IN (
+          SELECT p.session_id FROM session_preferences p
+          WHERE p.project_id = ? AND p.last_accessed_at < ?
+            AND NOT EXISTS (SELECT 1 FROM backlogs b WHERE b.id = 'session:' || p.session_id)
+          ORDER BY p.last_accessed_at, p.session_id LIMIT ?
+        )
+      `).run(projectID, cutoff, LIMITS.tasks)
+    }).immediate()
+    // Compaction is database-wide, independently throttled across plugin instances.
+    const compact = this.db.transaction(() => this.claimMaintenance("compaction", now)).immediate()
+    if (!compact) return
+    const pages = this.db.query<{ page_count: number }, []>("PRAGMA page_count").get()?.page_count ?? 0
+    const free = this.db.query<{ freelist_count: number }, []>("PRAGMA freelist_count").get()?.freelist_count ?? 0
+    const pageSize = this.db.query<{ page_size: number }, []>("PRAGMA page_size").get()?.page_size ?? 4096
+    // Reuse smaller amounts of free space; rebuild only after substantial deletions.
+    try {
+      if (free * pageSize >= 4 * 1024 * 1024 && free >= pages / 4) this.db.run("VACUUM")
+    } finally {
+      this.db.query("PRAGMA wal_checkpoint(TRUNCATE)").get()
+    }
   }
 
   private snapshot(boardID: string): Snapshot {
@@ -169,11 +315,19 @@ export class SessionStore {
   }
 
   read(boardID: string): Snapshot {
+    this.touch(boardID)
     return this.db.transaction(() => this.snapshot(boardID))()
   }
 
   update(scope: SessionScope, update: (backlog: Backlog) => Backlog, expectedRevision?: number): Snapshot {
     return this.db.transaction(() => {
+      if (scope.settingsRevision !== undefined) {
+        const global = this.db.query<{ revision: number }, [string]>("SELECT revision FROM project_settings WHERE project_id = ?").get(GLOBAL_SETTINGS_ID)?.revision ?? 0
+        const project = this.db.query<{ revision: number }, [string]>("SELECT revision FROM project_settings WHERE project_id = ?").get(scope.projectID)?.revision ?? 0
+        if (global !== scope.settingsRevision.global || project !== scope.settingsRevision.project) {
+          throw new Error("Backlog settings changed. Refresh and try again.")
+        }
+      }
       if (this.mode(scope.sessionID, scope.defaultMode) !== scope.mode) {
         throw new Error("The backlog scope changed. Refresh and try again.")
       }
@@ -183,12 +337,19 @@ export class SessionStore {
       }
       const backlog = parseBacklog(update(previous.backlog))
       validateLimits(backlog)
+      if (scope.taskDetail === "lightweight") {
+        const existing = new Set(previous.backlog.items.map(({ id }) => id))
+        for (const item of backlog.items) {
+          if (!existing.has(item.id)) parseLightweightNotes(item.notes)
+        }
+      }
       const revision = previous.revision + 1
+      const now = Date.now()
       this.db.query(`
-        INSERT INTO backlogs(id, project_id, directory, title, mode, revision, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO backlogs(id, project_id, directory, title, mode, revision, updated_at, last_accessed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, directory = excluded.directory,
-          title = excluded.title, revision = excluded.revision, updated_at = excluded.updated_at
-      `).run(scope.boardID, scope.projectID, scope.directory, scope.title.slice(0, LIMITS.title), scope.mode, revision, Date.now())
+          title = excluded.title, revision = excluded.revision, updated_at = excluded.updated_at, last_accessed_at = excluded.last_accessed_at
+      `).run(scope.boardID, scope.projectID, scope.directory, scope.title.slice(0, LIMITS.title), scope.mode, revision, now, now)
       const categoryInsert = this.db.query(`
         INSERT INTO categories(board_id, id, title, color, icon, position) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(board_id, id) DO UPDATE SET title = excluded.title, color = excluded.color,
@@ -228,6 +389,7 @@ export class SessionStore {
     const offset = pageInteger(options.offset, 0, Number.MAX_SAFE_INTEGER)
     const limit = pageInteger(options.limit, 20, LIMITS.page)
     if (limit === 0) throw new Error("limit must be at least 1")
+    this.touch(boardID)
     return this.db.transaction(() => {
       const session = this.db.query<{ revision: number }, [string]>("SELECT revision FROM backlogs WHERE id = ?").get(boardID)
       const categories = session ? this.db.query<CategoryRow, [string]>(

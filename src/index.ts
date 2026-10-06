@@ -26,13 +26,14 @@ import {
   record,
   requiredString,
 } from "./input.js"
-import { LIMITS, pageInteger, SessionStore, type PageOptions, type ScopeMode, type SessionScope } from "./session-store.js"
+import { LIMITS, MAINTENANCE_INTERVAL, pageInteger, SessionStore, type PageOptions, type SessionScope } from "./session-store.js"
+import { LIGHTWEIGHT_NOTES_MAX, parseBacklogSettings, type BacklogSettings } from "./settings.js"
 import { SessionBacklog } from "./session-rpc.js"
 import { registerWorkflowSkill } from "./workflow-skill.js"
 
 const runtimes = new WeakMap<Plugin.Context, {
   store: SessionStore
-  defaultMode: ScopeMode
+  defaults: BacklogSettings
   changed: (sessionID: string, boardID: string, revision: number) => Promise<void>
 }>()
 
@@ -40,6 +41,11 @@ function runtime(context: Plugin.Context) {
   const value = runtimes.get(context)
   if (!value) throw new Error("Session backlog is not initialized")
   return value
+}
+
+function settings(context: Plugin.Context): BacklogSettings {
+  const { store, defaults } = runtime(context)
+  return store.settings(projectKey(context), defaults).project.settings
 }
 
 function sameDirectory(left: string, right: string): boolean {
@@ -52,12 +58,18 @@ async function sessionScope(context: Plugin.Context, sessionID: string): Promise
   if (session.projectID !== context.location.project.id || !sameDirectory(session.location.directory, context.location.directory)) {
     throw new Error("This session belongs to a different location")
   }
-  const { store, defaultMode } = runtime(context)
-  const mode = store.mode(sessionID, defaultMode)
+  const { store, defaults } = runtime(context)
   const projectID = projectKey(context)
+  const configuration = store.settings(projectID, defaults)
+  const { defaultMode } = configuration.project.settings
+  const mode = store.mode(sessionID, defaultMode)
   const boardID = mode === "project" ? `project:${projectID}` : `session:${sessionID}`
+  store.access(sessionID, projectID, boardID)
   return {
-    sessionID, boardID, mode, defaultMode, projectID, directory: session.location.directory,
+    sessionID, boardID, mode, defaultMode,
+    settingsRevision: { global: configuration.global.revision, project: configuration.project.revision },
+    taskDetail: configuration.project.settings.taskDetail,
+    projectID, directory: session.location.directory,
     title: mode === "project" ? `${basename(context.location.project.canonical)} project backlog` : session.title ?? "Untitled session",
   }
 }
@@ -142,10 +154,10 @@ export default Plugin.define({
   async setup(context) {
     const configuredPath = context.options.databasePath
     if (configuredPath !== undefined && typeof configuredPath !== "string") throw new Error("databasePath must be a string")
-    const defaultMode = context.options.defaultMode ?? "session"
-    if (defaultMode !== "session" && defaultMode !== "project") throw new Error("defaultMode must be session or project")
+    const defaults = parseBacklogSettings(context.options)
     const store = new SessionStore(configuredPath)
-    runtimes.set(context, { store, defaultMode, changed: async () => {} })
+    let maintenanceTimer: ReturnType<typeof setInterval> | undefined
+    runtimes.set(context, { store, defaults, changed: async () => {} })
     try {
       const readBoard = async (values: Record<string, unknown>) => {
         const scope = await sessionScope(context, requiredString(values, "sessionID"))
@@ -197,13 +209,35 @@ export default Plugin.define({
             const scope = await sessionScope(context, sessionID)
             const snapshot = store.read(scope.boardID)
             await runtime(context).changed(sessionID, scope.boardID, snapshot.revision)
-            return { mode: scope.mode, defaultMode, boardID: scope.boardID }
+            return { mode: scope.mode, defaultMode: scope.defaultMode, boardID: scope.boardID }
           } catch (error) { return call.error("failed", error instanceof Error ? error.message : "Could not change the backlog scope", {}) }
+        },
+        settings: async (_input, call) => {
+          try { return store.settings(projectKey(context), defaults) }
+          catch (error) { return call.error("failed", error instanceof Error ? error.message : "Could not read backlog settings", {}) }
+        },
+        setSettings: async (input, call) => {
+          try {
+            const values = record(input)
+            const projectID = projectKey(context)
+            if (requiredString(values, "expectedProjectID") !== projectID) throw new Error("The project changed. Reopen Backlog Settings.")
+            const scope = requiredString(values, "scope")
+            if (scope !== "global" && scope !== "project") throw new Error("Invalid settings scope")
+            const snapshot = store.setSettings(projectID, scope, values.settings === null ? null : parseBacklogSettings(values.settings), defaults,
+              pageInteger(values.revision, 0, Number.MAX_SAFE_INTEGER))
+            try {
+              await registration.events.emit("settingsUpdated", {
+                scope, revision: scope === "global" ? snapshot.global.revision : snapshot.project.revision,
+              })
+            }
+            catch (error) { console.warn("Backlog settings were saved, but their notification failed", error) }
+            return snapshot
+          } catch (error) { return call.error("failed", error instanceof Error ? error.message : "Could not save backlog settings", {}) }
         },
       })
       runtimes.set(context, {
         store,
-        defaultMode,
+        defaults,
         changed: async (sessionID, boardID, revision) => {
           try { await registration.events.emit("updated", { sessionID, boardID, revision }) }
           catch (error) { console.warn("Session backlog was saved, but its sidebar notification failed", error) }
@@ -237,7 +271,7 @@ export default Plugin.define({
 
       tools.add({
         name: "session_backlog_get",
-        description: "Read one task, including its full description and continuation checkpoint in notes, from the selected backlog. Read relevant doing tasks before resuming after compaction and read full notes before replacing partial or unfamiliar content. Other sessions' isolated backlogs cannot be accessed.",
+        description: "Read one task and full notes before resuming or replacing context. Other sessions' isolated backlogs are inaccessible.",
         input: idInput,
         options: { codemode: false },
         execute: async (input, toolContext) => {
@@ -251,12 +285,12 @@ export default Plugin.define({
 
       tools.add({
         name: "session_backlog_add",
-        description: "Add a task at a zero-based position within a backlog category. Use an actionable title; non-trivial tasks require notes with objective, scope/constraints, completion criteria, progress, next step, and relevant decisions/blockers. Simple one-step tasks may omit notes.",
+        description: `Add one small actionable step, not a whole plan. Short title; follow selected task detail mode. Lightweight: notes required, one brief description (max ${LIGHTWEIGHT_NOTES_MAX} characters).`,
         input: {
           type: "object",
           properties: {
             title: { type: "string", minLength: 1, description: "Concise action and target." },
-            notes: { type: "string", description: "Task description and continuation checkpoint. Required by workflow for non-trivial work: objective, scope/constraints, completion criteria, progress, next step, and relevant decisions/blockers." },
+            notes: { type: "string", description: `Task description. Lightweight: required, one short sentence (max ${LIGHTWEIGHT_NOTES_MAX} characters). Do not repeat the plan.` },
             status: { type: "string", minLength: 1 },
             position: { type: "integer", minimum: 0 },
           },
@@ -294,13 +328,13 @@ export default Plugin.define({
 
       tools.add({
         name: "session_backlog_update",
-        description: "Change a backlog task title or replace its notes. Save progress, decisions/blockers, and next step at milestones and before planned compaction. Preserve relevant objective, constraints, completion criteria, and existing context; read full notes first if needed. Use null notes to remove them.",
+        description: "Change title or replace notes; null clears notes. Read existing context first, preserve essentials, keep checkpoints short. Do not append logs or repeat the plan.",
         input: {
           type: "object",
           properties: {
             id: { type: "string", minLength: 1 },
             title: { type: "string", minLength: 1, description: "Concise action and target." },
-            notes: { type: ["string", "null"], description: "Complete replacement description/checkpoint, not an append. Preserve relevant context and update actual progress and next step. Null removes notes." },
+            notes: { type: ["string", "null"], description: "Replace brief context, not an appended log. Null removes notes." },
           },
           required: ["id"],
           additionalProperties: false,
@@ -503,9 +537,17 @@ export default Plugin.define({
         },
       })
     })
-      await registerWorkflowSkill(context)
-      return () => { runtimes.delete(context); store.close() }
+      await registerWorkflowSkill(context, () => settings(context).taskDetail)
+      const maintain = () => {
+        try { store.maintain(projectKey(context), defaults) }
+        catch (error) { console.warn("Session backlog automatic maintenance failed; stored tasks remain available", error) }
+      }
+      maintain()
+      maintenanceTimer = setInterval(maintain, MAINTENANCE_INTERVAL)
+      maintenanceTimer.unref()
+      return () => { clearInterval(maintenanceTimer); runtimes.delete(context); store.close() }
     } catch (error) {
+      clearInterval(maintenanceTimer)
       runtimes.delete(context)
       store.close()
       throw error

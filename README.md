@@ -13,6 +13,7 @@ Package: [kodradev-opencode-backlog on npm](https://www.npmjs.com/package/kodrad
 - **Project mode**: sessions in the same project share a backlog.
 - Live sidebar, task details, notes, and editable categories.
 - Read-only history of stored backlogs in the project.
+- Project settings for task detail, default scope, and automatic retention.
 - Bundled `kodradev-backlog` skill and workflow reminder; no manual `AGENTS.md` setup needed.
 
 New backlogs start with **Todo**, **Doing**, **Blocked**, and **Done**. Categories can be renamed, styled, reordered, or removed when empty.
@@ -60,10 +61,14 @@ Add the package to `~/.config/opencode/opencode.jsonc`, preserving other plugin 
 
 | Option | Purpose |
 | --- | --- |
-| `defaultMode` | `session` (default) gives each session its own backlog; `project` shares a backlog across sessions in the same project. |
+| `defaultMode` | Initial `session` (default) / `project` global default. Settings can override it globally or per project. |
 | `databasePath` | Optional absolute path to the server's SQLite database; omit it to use the [default storage location](#storage). |
+| `retentionDays` | Initial global retention default (default: `90`). Set any non-negative whole number; `0` disables expiration. See [automatic retention](#automatic-retention). |
+| `taskDetail` | Initial global task detail default. `lightweight` (default): small tasks, short titles, and very brief descriptions. `detailed`: expanded context and continuation checkpoints. |
 
 `/backlog-scope` overrides `defaultMode` for one session; **Use configured default** clears that override.
+
+These options provide initial global defaults. **Backlog Settings** can change them globally or override them per project, without editing OpenCode's native settings or configuration files.
 
 Remove the original `opencode-backlog` plugin entry to avoid duplicate sidebars. The package includes both server and TUI entrypoints. Reopen the TUI after enabling it.
 
@@ -110,6 +115,7 @@ Custom category IDs are supported too. The pending-task preview excludes IDs `do
 | Section | What it does |
 | --- | --- |
 | **Scope indicator** | Shows **Only this session** or **Shared project**. Click it to choose the backlog scope without moving any tasks. |
+| **Settings** | Opens global or per-project settings from the sidebar header, the scope chooser, or `/backlog-settings`. |
 | **Category groups** | Show up to eight pending tasks in total, grouped by category, with each category's full task count. Empty groups and groups without tasks in the preview are hidden. |
 | **More pending / completed links** | Open the full backlog browser. Done tasks remain stored and appear as a completed count rather than individual sidebar entries. |
 | **Backlog browser** | `/session-tasks` lists the selected backlog, including completed tasks, with 20 tasks per page. |
@@ -140,35 +146,46 @@ Click a sidebar task or select **Browse selected backlog** in the command palett
 | `/session-backlog-categories` | Manage the selected backlog's categories |
 | `/session-backlog-purge` | Purge a category after confirmation |
 | `/backlog-scope` | Choose this session's scope or restore the configured default |
+| `/backlog-settings` | Configure global or per-project task detail, retention days, and default scope |
 | `/session-backlogs` | Read-only history of stored backlogs in this project |
 
 Deleting tasks or purging categories requires explicit user authorization.
 
-### Task Descriptions And Continuity
+### Backlog Settings
 
-Agents use an actionable `title` and the existing `notes` field for task context.
-Non-trivial tasks require a brief description and a current continuation checkpoint:
+Open **Settings** beside the sidebar's Backlog heading, select **Settings** in **Change scope**, or run `/backlog-settings`. The dialog works with remote servers too; settings persist in SQLite.
 
-```text
-Objective: What should change and why.
-Scope/constraints: Relevant files and limits.
-Completion criteria: What must be true before marking done.
-Progress: Completed work and verification actually performed.
-Next step: The next concrete action.
-Decisions/blockers: Relevant choices or blockers, when present.
-```
+Each dialog edit happens at one of two scopes, chosen from the first row (**Settings scope: Global / Project**):
 
-The bundled workflow requires agents to update notes at meaningful milestones
-and before planned compaction or handoffs. After resuming or compacting, agents
-must review the selected backlog and read relevant Doing tasks with
-`session_backlog_get`. List output omits notes by default; `includeNotes` returns
-previews, which are not a substitute for full notes.
+| Scope | Applies to |
+| --- | --- |
+| **Global** | Every project on this server/database, unless a project overrides it. Stored per database. |
+| **Project** | Only the current project. Overrides global settings for its sessions. |
 
-A compaction hook reminds the summarizer to preserve known task IDs, scope, and
-next steps, and to request backlog recovery on resume. It does not write notes
-automatically; automatic compaction can occur before a checkpoint is saved.
-These are agent workflow instructions, not schema validation: simple tasks and
-manual entries can still omit notes. Existing tasks and storage remain unchanged.
+Resolution order is **project → global → plugin options**. The plugin's `options` remain the initial defaults for the global level. A project that never opened Settings inherits global values; changing global settings updates every project that has no project override.
+
+- **Task detail:** Lightweight (default) uses fewer tokens; Detailed uses more tokens to preserve more precise context for resuming work. Changes affect subsequent agent requests and new manual tasks. Existing tasks and notes are not rewritten.
+- **Retention:** any non-negative whole number of days; `0` disables expiration. Enabling expiration or shortening its window requires confirmation. The new window applies at the next scheduled cleanup, not as an immediate purge.
+- **Default scope:** Session or Project. Only sessions using the configured default change their selected backlog; per-session overrides remain. No tasks are moved or merged.
+- **Reset:** Global resets to the plugin-configured defaults; Project resets to inherit global. Resetting stores no override; it does not delete tasks, notes, or backlogs.
+
+A project override is a complete snapshot of the three values: changing one field at the project scope stores the inherited values for the other fields too, so later changes to those fields at the global scope no longer reach that project until its override is reset. Reset the project to resume inheritance. Changing plugin `options` requires a plugin reload; dialog changes take effect without reloading.
+
+Settings use revision checks at the edited scope to reject stale dialogs instead of silently overwriting another client's changes. Backlog updates also re-check the resolved settings, so a settings change cannot be applied against a stale backlog snapshot.
+
+The Task detail dialog shows both explanations with wrapped text rather than truncating them into one row. Click a mode or press `l` for Lightweight / `d` for Detailed; `Esc` cancels.
+
+### Small Tasks And Continuity
+
+**One actionable step = one task**, within the same session/project backlog. Prefer `Implement settings RPC`, `Add settings dialog`, and `Document retention` over one task with a long plan duplicated in its notes.
+
+In **Lightweight** mode, every new task has a short title, status, and notes with a very brief description: one concise sentence, at most 200 characters. It uses fewer tokens by keeping context minimal, making it suitable for short, clearly scoped work. The description explains the essential purpose or constraint, not the whole plan. Status records progress; routine note updates are unnecessary. Agent and manual creation both require this short description.
+
+**Detailed** mode allows brief objective, scope/constraints, completion criteria, progress, next step, and blockers for complex work. It uses more tokens to preserve these details, making constraints and the next step more precise when resuming after a pause, handoff, or compaction. This is a context-retention tradeoff, not a guarantee of better model answers. Keep each field to one short line, not a running log. Manual creation also offers optional notes.
+
+Both modes keep the same safety and recovery workflow: review/reuse tasks, use truthful statuses, and read relevant Doing tasks after resuming. List notes are previews, not full context. Before handoff, save only missing context needed to continue. The compaction reminder preserves task IDs, scope, and next step; it never saves notes automatically.
+
+The short-description requirement and 200-character limit apply to new Lightweight tasks, including manual entries. Existing notes are not trimmed, and editing older tasks remains unrestricted within the general storage limits. The Lightweight reminder does not require loading the full workflow skill on every task. External `AGENTS.md` instructions that still mandate lengthy structured notes must be adjusted separately; this plugin does not rewrite those files.
 
 ## Agent Tools
 
@@ -192,7 +209,7 @@ Tools use the calling session's selected scope automatically.
 
 ## Storage
 
-Tasks, categories, and scope preferences persist in SQLite on the OpenCode server:
+Tasks, categories, scope preferences, and global/project settings persist in SQLite on the OpenCode server:
 
 ```text
 ~/.local/share/opencode/kodradev-opencode-backlog/backlog.sqlite
@@ -201,7 +218,31 @@ $XDG_DATA_HOME/opencode/kodradev-opencode-backlog/backlog.sqlite   (when XDG_DAT
 
 Set an absolute `databasePath` in plugin options to use another location. The TUI accesses storage through RPC, including when connected to a remote server.
 
-Existing upstream `BACKLOG.json` files are not imported or modified. Backlogs are retained until explicitly cleared; there is no automatic cleanup.
+Existing upstream `BACKLOG.json` files are not imported or modified.
+
+### Automatic Retention
+
+Automatic expiration is enabled by default with a global `retentionDays` of `90`. Change it in **Backlog Settings** globally or per project, or set the initial global default in the plugin's `options`, for example:
+
+```jsonc
+"options": {
+  "defaultMode": "session",
+  "retentionDays": 180
+}
+```
+
+Set `retentionDays` to `0` to keep all backlog data indefinitely. Values must be non-negative whole numbers whose millisecond duration fits in JavaScript's safe integer range.
+
+- Only **session backlogs** that are empty or contain exclusively `done`/`cancelled` tasks can expire. Expiration permanently deletes the backlog, categories, tasks, and notes; there is no archive or undo.
+- **Project backlogs and any backlog with pending tasks are never automatically deleted.** Custom category IDs other than `done`/`cancelled`, including Blocked, Review, and Waiting, count as pending.
+- Reading or editing a backlog refreshes its inactivity window. Resolving a session's scope also refreshes its selected backlog and scope preference. Access writes are throttled to once per hour, with an extra hour of retention to protect recent reads. Merely listing stored backlogs does not refresh every entry.
+- Unused session scope overrides expire after the same inactivity period, but only when their isolated backlog no longer exists. Legacy overrides whose project cannot be identified are retained until the session is accessed again.
+- Existing data receives a fresh inactivity window when upgrading from the original schema without access timestamps; old history is not immediately deleted. The current schema version 3 is not readable by older plugin releases; back up the database before upgrading if you need a downgrade path.
+- Maintenance runs when the plugin loads and every 24 hours while it remains loaded. Cleanup is limited to 100 eligible backlogs and 1,000 unused overrides per project per day. Multiple instances sharing the database coordinate through SQLite; keep retention options consistent for the same project. Unloaded projects are cleaned when their plugin next loads.
+
+Deleted pages are reusable by SQLite. Database-wide maintenance runs at most once per day and performs `VACUUM` when at least 4 MiB and 25% of database pages are free, then attempts a WAL truncation checkpoint. Smaller free allocations remain available for reuse. Readers or competing writers can defer reclamation; maintenance failures are logged without disabling backlog tools. `VACUUM` can briefly block writes and requires temporary free disk space of up to twice the database size.
+
+Retention reduces accumulated finished session history, **not total disk usage to a fixed cap**: protected backlogs can still grow, and a large expired history may take multiple daily batches to clear. WAL checkpoints alone do not delete tasks or compact database pages. Explicit export, archival, disk statistics, and manual maintenance commands remain future work.
 
 ## Development
 

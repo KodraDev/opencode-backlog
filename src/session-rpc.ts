@@ -6,6 +6,16 @@ const page = { type: "integer", minimum: 1, maximum: 50 } as const
 const offset = { type: "integer", minimum: 0 } as const
 const output = { type: "object" } as const
 const errors = { failed: { type: "object", additionalProperties: false } } as const
+const settings = {
+  type: "object",
+  properties: {
+    defaultMode: { type: "string", enum: ["session", "project"] },
+    retentionDays: { type: "integer", minimum: 0 },
+    taskDetail: { type: "string", enum: ["lightweight", "detailed"] },
+  },
+  required: ["defaultMode", "retentionDays", "taskDetail"],
+  additionalProperties: false,
+} as const
 
 export const SessionBacklog = Rpc.define({
   id: "kodradev.backlog",
@@ -55,12 +65,36 @@ export const SessionBacklog = Rpc.define({
       },
       output, errors,
     },
+    settings: {
+      input: { type: "object", properties: {}, additionalProperties: false },
+      output, errors,
+    },
+    setSettings: {
+      input: {
+        type: "object", properties: {
+          expectedProjectID: { type: "string", minLength: 1 },
+          scope: { type: "string", enum: ["global", "project"] },
+          revision: { type: "integer", minimum: 0 },
+          settings: { anyOf: [settings, { type: "null" }] },
+        },
+        required: ["expectedProjectID", "scope", "revision", "settings"], additionalProperties: false,
+      },
+      output, errors,
+    },
   },
   events: {
     updated: {
       schema: {
         type: "object", properties: { sessionID: session, boardID: board, revision: { type: "integer", minimum: 0 } },
         required: ["sessionID", "boardID", "revision"], additionalProperties: false,
+      },
+    },
+    settingsUpdated: {
+      schema: {
+        type: "object", properties: {
+          scope: { type: "string", enum: ["global", "project"] }, revision: { type: "integer", minimum: 0 },
+        },
+        required: ["scope", "revision"], additionalProperties: false,
       },
     },
   },

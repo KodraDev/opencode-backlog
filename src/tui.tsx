@@ -20,9 +20,10 @@ import {
   type CategoryIcon,
   type Status,
 } from "./backlog.js"
-import { listBacklog, listSessions, readBacklog, sessionAccess, updateBacklog, type BacklogAccess } from "./ui-client.js"
+import { listBacklog, listSessions, readBacklog, readSettings, saveSettings, sessionAccess, updateBacklog, type BacklogAccess, type SettingsAccess } from "./ui-client.js"
 import { SessionBacklog } from "./session-rpc.js"
 import type { BacklogPage } from "./session-store.js"
+import { LIGHTWEIGHT_NOTES_MAX, parseLightweightNotes, parseRetentionDays, type BacklogSettings, type SettingsScope, type TaskDetail } from "./settings.js"
 
 const pinned = new WeakMap<Plugin.Context, BacklogAccess>()
 
@@ -80,8 +81,9 @@ function BacklogView(props: { context: Plugin.Context; sessionID: string }) {
   const unsubscribe = client.events.on("updated", (event) => {
     if (event.data.sessionID === props.sessionID || event.data.boardID === snapshot.latest?.page?.boardID) void refetch()
   }, { signal: controller.signal })
+  const unsubscribeSettings = client.events.on("settingsUpdated", () => { void refetch() }, { signal: controller.signal })
   const timer = setInterval(() => { void refetch() }, 15_000)
-  onCleanup(() => { clearInterval(timer); controller.abort(); unsubscribe() })
+  onCleanup(() => { clearInterval(timer); controller.abort(); unsubscribe(); unsubscribeSettings() })
   const error = () => snapshot()?.error
   const open = async (item: BacklogItem) => {
     try {
@@ -104,9 +106,10 @@ function BacklogView(props: { context: Plugin.Context; sessionID: string }) {
 
   return (
     <box>
-      <text fg={theme().text.base}>
-        <b>Backlog</b>
-      </text>
+      <box flexDirection="row" justifyContent="space-between" gap={1}>
+        <text fg={theme().text.base}><b>Backlog</b></text>
+        <text fg={theme().text.action.primary.base} onMouseUp={() => perform(manageSettings)}>Settings</text>
+      </box>
       <Show when={page()}>
         <text fg={theme().text.action.primary.base} onMouseUp={() => perform(chooseScope)}>
           {page()?.mode === "project" ? "Shared project" : "Only this session"} · change scope
@@ -260,18 +263,30 @@ function backlogLocation(context: Plugin.Context): { directory: string; path: Ba
 
 async function addBacklogItem(context: Plugin.Context): Promise<void> {
   const { path } = backlogLocation(context)
+  const settings = (await readSettings(path)).project.settings
   const title = await context.ui.dialog.prompt({
     title: "New backlog task",
     placeholder: "Task title",
   })
   if (!title?.trim()) return
 
-  const notes = await context.ui.dialog.prompt({
-    title: title.trim(),
-    description: "Optional notes",
-    placeholder: "Leave empty for no notes",
-  })
-  if (notes === undefined) return
+  let notes = ""
+  while (true) {
+    const value = await context.ui.dialog.prompt({
+      title: title.trim(),
+      description: settings.taskDetail === "lightweight" ? `Short description · required, max ${LIGHTWEIGHT_NOTES_MAX} characters` : "Optional brief context",
+      placeholder: settings.taskDetail === "lightweight" ? "One short sentence explaining the task" : "Leave empty for no notes",
+      value: notes,
+    })
+    if (value === undefined) return
+    notes = value.trim()
+    try {
+      if (settings.taskDetail === "lightweight") notes = parseLightweightNotes(notes)
+      break
+    } catch (cause) {
+      context.ui.toast.show({ message: cause instanceof Error ? cause.message : String(cause), variant: "error" })
+    }
+  }
 
   let item: BacklogItem | undefined
   await updateBacklog(path, (current) => {
@@ -676,11 +691,163 @@ async function chooseScope(context: Plugin.Context): Promise<void> {
       { title: "Session", value: "session", description: "An isolated backlog for this session" },
       { title: "Project", value: "project", description: "Shared with sessions in this project" },
       { title: "Use configured default", value: "default", description: "Remove this session's override" },
+      { title: "Settings", value: "settings", description: "Task detail, retention, and default scope for this project" },
     ],
   })
   if (!choice) return
+  if (choice === "settings") return manageSettings(context)
   const result = await path.client.setMode({ sessionID: path.sessionID, mode: choice }, { location: { directory: path.directory } }) as { mode: string }
   context.ui.toast.show({ message: `Using ${result.mode} backlog. Existing tasks were not moved.`, variant: "success" })
+}
+
+function settingsLocation(context: Plugin.Context): SettingsAccess {
+  const captured = pinned.get(context)
+  if (captured) return captured
+  const route = context.ui.router.current()
+  if (route.type === "session") return sessionAccess(context, route.sessionID)
+  const directory = context.location?.directory ?? context.data.location.default()?.directory
+  if (!directory) throw new Error("Open a project before using Backlog Settings")
+  return { directory, client: context.client.rpc(SessionBacklog) }
+}
+
+function retentionWarning(previous: number, next: number, scope: SettingsScope): string {
+  if (next === 0 || (previous !== 0 && next >= previous)) return ""
+  const target = scope === "global"
+    ? "Eligible session backlogs in every project"
+    : "Eligible session backlogs in this project"
+  return `${target} inactive for ${next} days can be permanently deleted at the next daily cleanup. Project backlogs and pending tasks are protected. There is no undo.`
+}
+
+function TaskDetailDialog(props: { context: Plugin.Context; current: TaskDetail; choose: (detail: TaskDetail) => void }) {
+  const options: { value: TaskDetail; title: string; shortcut: string; description: string }[] = [
+    {
+      value: "lightweight", title: "Lightweight", shortcut: "l",
+      description: `Fewer tokens. Every task has a very short description: one sentence, up to ${LIGHTWEIGHT_NOTES_MAX} characters. Best for small, clearly scoped steps.`,
+    },
+    {
+      value: "detailed", title: "Detailed", shortcut: "d",
+      description: "More tokens. Keeps objectives, constraints, progress, and next steps for more precise resumption of complex work. Does not guarantee better model answers.",
+    },
+  ]
+  onMount(() => props.context.ui.dialog.set({ size: "medium" }))
+  props.context.keymap.layer(() => ({
+    mode: "modal", priority: 100,
+    commands: options.map((option) => ({
+      bind: option.shortcut, title: `Use ${option.title} task detail`, group: "Backlog",
+      run: () => props.choose(option.value),
+    })),
+  }))
+  return (
+    <box paddingLeft={2} paddingRight={2} paddingBottom={1} gap={1}>
+      <box flexDirection="row" justifyContent="space-between" gap={1}>
+        <text fg={props.context.theme.text.base}><b>Task detail</b></text>
+        <text fg={props.context.theme.text.muted} onMouseUp={() => props.context.ui.dialog.clear()}>esc</text>
+      </box>
+      <For each={options}>
+        {(option) => (
+          <box gap={1} minWidth={0} onMouseUp={() => props.choose(option.value)}>
+            <text fg={props.context.theme.text.action.primary.base} wrapMode="word">
+              <b>{props.current === option.value ? "●" : "○"} {option.shortcut} {option.title}</b>
+              {props.current === option.value ? " · current" : ""}
+            </text>
+            <text fg={props.context.theme.text.base} wrapMode="word">{option.description}</text>
+          </box>
+        )}
+      </For>
+      <text fg={props.context.theme.text.muted} wrapMode="word">Press l or d to choose · esc to cancel</text>
+    </box>
+  )
+}
+
+function chooseTaskDetail(context: Plugin.Context, current: TaskDetail): Promise<TaskDetail | undefined> {
+  return new Promise((resolve) => {
+    context.ui.dialog.show(() => <TaskDetailDialog context={context} current={current} choose={(detail) => {
+      resolve(detail)
+      context.ui.dialog.clear()
+    }} />, () => resolve(undefined))
+  })
+}
+
+async function manageSettings(context: Plugin.Context): Promise<void> {
+  const access = settingsLocation(context)
+  let scope: SettingsScope = "project"
+  while (true) {
+    const snapshot = await readSettings(access)
+    const level = scope === "global" ? snapshot.global : snapshot.project
+    const current = level.settings
+    const scopeName = scope === "global" ? "Global" : "Project"
+    const inheritance = level.override ? "Customized here" : scope === "global" ? "Using configured defaults" : "Inherited from global"
+    const choice = await context.ui.dialog.select<"scope" | "detail" | "retention" | "defaultScope" | "reset">({
+      title: `Backlog Settings · ${scope === "global" ? "Global · all projects" : "Project · this project"}`,
+      placeholder: scope === "global"
+        ? "Defaults for every project unless a project overrides them"
+        : "Overrides global settings for this project",
+      options: [
+        {
+          title: `Settings scope · ${scopeName}`,
+          value: "scope",
+          description: scope === "global" ? "Switch to this project's overrides" : "Switch to global defaults",
+        },
+        { title: `Task detail · ${current.taskDetail === "lightweight" ? "Lightweight" : "Detailed"}`, value: "detail", description: level.override ? "Customized here" : "Inherited" },
+        { title: `Retention · ${current.retentionDays === 0 ? "Disabled" : `${current.retentionDays} days`}`, value: "retention", description: level.override ? "Customized here" : "Inherited" },
+        { title: `Default scope · ${current.defaultMode === "session" ? "Session" : "Project"}`, value: "defaultScope", description: level.override ? "Customized here" : "Inherited" },
+        {
+          title: scope === "global" ? "Reset global to configured defaults" : "Reset project to inherit global",
+          value: "reset",
+          description: "Existing tasks and notes stay unchanged",
+        },
+      ],
+    })
+    if (!choice) return
+    if (choice === "scope") { scope = scope === "global" ? "project" : "global"; continue }
+    let next: BacklogSettings | null = { ...current }
+    if (choice === "detail") {
+      const detail = await chooseTaskDetail(context, current.taskDetail)
+      if (!detail || detail === current.taskDetail) continue
+      next.taskDetail = detail
+    }
+    if (choice === "retention") {
+      const value = await context.ui.dialog.prompt({
+        title: `Retention days · ${scopeName}`, value: String(current.retentionDays), placeholder: "90",
+        description: "Whole days without access. 0 disables expiration. Project backlogs and pending tasks never expire.",
+      })
+      if (value === undefined) continue
+      try {
+        if (!/^\d+$/.test(value.trim())) throw new Error("Enter a non-negative whole number; 0 disables expiration")
+        next.retentionDays = parseRetentionDays(Number(value.trim()))
+      } catch (cause) {
+        context.ui.toast.show({ message: cause instanceof Error ? cause.message : String(cause), variant: "error" })
+        continue
+      }
+      if (next.retentionDays === current.retentionDays) continue
+      const warning = retentionWarning(current.retentionDays, next.retentionDays, scope)
+      if (warning && !await context.ui.dialog.confirm({ title: "Change automatic retention?", message: warning, label: { confirm: "Apply", cancel: "Cancel" } })) continue
+    }
+    if (choice === "defaultScope") {
+      const mode = await context.ui.dialog.select<BacklogSettings["defaultMode"]>({
+        title: `Default backlog scope · ${scopeName}`, current: current.defaultMode,
+        options: [
+          { title: "Session", value: "session", description: "Separate backlog for each session" },
+          { title: "Project", value: "project", description: "Shared backlog; per-session overrides still apply" },
+        ],
+      })
+      if (!mode || mode === current.defaultMode) continue
+      next.defaultMode = mode
+    }
+    if (choice === "reset") {
+      const inherited = scope === "global" ? snapshot.defaults : snapshot.global.settings
+      const warning = retentionWarning(current.retentionDays, inherited.retentionDays, scope)
+      const parent = scope === "global" ? "plugin-configured defaults" : "global settings"
+      if (!await context.ui.dialog.confirm({
+        title: "Reset Backlog Settings?",
+        message: `Restore ${parent} for ${scopeName.toLowerCase()} settings? Tasks and notes are not rewritten.${warning ? `\n\n${warning}` : ""}`,
+        label: { confirm: "Reset", cancel: "Cancel" },
+      })) continue
+      next = null
+    }
+    await saveSettings(access, scope, snapshot, next)
+    context.ui.toast.show({ message: `${scopeName} backlog settings saved.`, variant: "success" })
+  }
 }
 
 function Commands(props: { context: Plugin.Context }) {
@@ -770,6 +937,17 @@ function Commands(props: { context: Plugin.Context }) {
         palette: true,
         slash: { name: "backlog-scope" },
         run: () => run(chooseScope),
+      },
+      {
+        id: "kodradev.backlog.settings",
+        title: "Backlog Settings",
+        description: "Configure task detail, retention, and default scope for this project",
+        group: "Backlog", palette: true,
+        slash: { name: "backlog-settings" },
+        run: async () => {
+          try { await manageSettings(props.context) }
+          catch (cause) { props.context.ui.toast.show({ message: cause instanceof Error ? cause.message : String(cause), variant: "error" }) }
+        },
       },
     ],
   }))
