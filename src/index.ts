@@ -216,6 +216,28 @@ export default Plugin.define({
           try { return store.settings(projectKey(context), defaults) }
           catch (error) { return call.error("failed", error instanceof Error ? error.message : "Could not read backlog settings", {}) }
         },
+        storage: async (input, call) => {
+          try {
+            const scope = requiredString(record(input), "scope")
+            if (scope !== "global" && scope !== "project") throw new Error("Invalid storage scope")
+            return store.storage(projectKey(context), scope)
+          } catch (error) { return call.error("failed", error instanceof Error ? error.message : "Could not read backlog storage", {}) }
+        },
+        cleanup: async (input, call) => {
+          try {
+            const values = record(input)
+            const projectID = projectKey(context)
+            if (requiredString(values, "expectedProjectID") !== projectID) throw new Error("The project changed. Reopen Backlog Storage.")
+            const scope = requiredString(values, "scope")
+            if (scope !== "global" && scope !== "project") throw new Error("Invalid storage scope")
+            const result = store.cleanup(projectID, scope, pageInteger(values.cutoff, 0, Number.MAX_SAFE_INTEGER), requiredString(values, "fingerprint"))
+            if (result.deletedTasks > 0) {
+              try { await registration.events.emit("storageUpdated", {}) }
+              catch (error) { console.warn("Backlog tasks were deleted, but their notification failed", error) }
+            }
+            return result
+          } catch (error) { return call.error("failed", error instanceof Error ? error.message : "Could not clean backlog storage", {}) }
+        },
         setSettings: async (input, call) => {
           try {
             const values = record(input)

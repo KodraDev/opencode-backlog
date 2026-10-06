@@ -69,6 +69,25 @@ export const SessionBacklog = Rpc.define({
       input: { type: "object", properties: {}, additionalProperties: false },
       output, errors,
     },
+    storage: {
+      input: {
+        type: "object", properties: { scope: { type: "string", enum: ["global", "project"] } },
+        required: ["scope"], additionalProperties: false,
+      },
+      output, errors,
+    },
+    cleanup: {
+      input: {
+        type: "object", properties: {
+          expectedProjectID: { type: "string", minLength: 1 },
+          scope: { type: "string", enum: ["global", "project"] },
+          cutoff: { type: "integer", minimum: 0 },
+          fingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        },
+        required: ["expectedProjectID", "scope", "cutoff", "fingerprint"], additionalProperties: false,
+      },
+      output, errors,
+    },
     setSettings: {
       input: {
         type: "object", properties: {
@@ -83,6 +102,9 @@ export const SessionBacklog = Rpc.define({
     },
   },
   events: {
+    storageUpdated: {
+      schema: { type: "object", additionalProperties: false },
+    },
     updated: {
       schema: {
         type: "object", properties: { sessionID: session, boardID: board, revision: { type: "integer", minimum: 0 } },

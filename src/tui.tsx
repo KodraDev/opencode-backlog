@@ -20,7 +20,7 @@ import {
   type CategoryIcon,
   type Status,
 } from "./backlog.js"
-import { listBacklog, listSessions, readBacklog, readSettings, saveSettings, sessionAccess, updateBacklog, type BacklogAccess, type SettingsAccess } from "./ui-client.js"
+import { cleanStorage, listBacklog, listSessions, readBacklog, readSettings, readStorage, saveSettings, sessionAccess, updateBacklog, type BacklogAccess, type SettingsAccess } from "./ui-client.js"
 import { SessionBacklog } from "./session-rpc.js"
 import type { BacklogPage } from "./session-store.js"
 import { LIGHTWEIGHT_NOTES_MAX, parseLightweightNotes, parseRetentionDays, type BacklogSettings, type SettingsScope, type TaskDetail } from "./settings.js"
@@ -82,8 +82,9 @@ function BacklogView(props: { context: Plugin.Context; sessionID: string }) {
     if (event.data.sessionID === props.sessionID || event.data.boardID === snapshot.latest?.page?.boardID) void refetch()
   }, { signal: controller.signal })
   const unsubscribeSettings = client.events.on("settingsUpdated", () => { void refetch() }, { signal: controller.signal })
+  const unsubscribeStorage = client.events.on("storageUpdated", () => { void refetch() }, { signal: controller.signal })
   const timer = setInterval(() => { void refetch() }, 15_000)
-  onCleanup(() => { clearInterval(timer); controller.abort(); unsubscribe(); unsubscribeSettings() })
+  onCleanup(() => { clearInterval(timer); controller.abort(); unsubscribe(); unsubscribeSettings(); unsubscribeStorage() })
   const error = () => snapshot()?.error
   const open = async (item: BacklogItem) => {
     try {
@@ -768,6 +769,67 @@ function chooseTaskDetail(context: Plugin.Context, current: TaskDetail): Promise
   })
 }
 
+function storageSize(bytes: number): string {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"]
+  const index = bytes === 0 ? 0 : Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+  return `${(bytes / 1024 ** index).toLocaleString(undefined, { maximumFractionDigits: index === 0 ? 0 : 2 })} ${units[index]}`
+}
+
+async function manageStorage(context: Plugin.Context, access: SettingsAccess, initialScope: SettingsScope): Promise<void> {
+  let scope = initialScope
+  while (true) {
+    const { stats, preview } = await readStorage(access, scope)
+    const target = scope === "global" ? "all projects in this database" : "this project"
+    const choice = await context.ui.dialog.select<"details" | "cleanup" | "scope">({
+      title: `Backlog Storage · ${scope === "global" ? "Global · all projects" : "Project · this project"}`,
+      placeholder: "Database size is global; cleanup uses the selected scope",
+      options: [
+        { title: `Disk usage · ${storageSize(stats.totalBytes)}`, value: "details", description: `${stats.totalTasks} tasks · ${stats.totalBacklogs} backlogs · SQLite + WAL + SHM` },
+        { title: `Cleanup scope · ${scope === "global" ? "Global" : "Project"}`, value: "scope", description: `Cleanup affects ${target}; click to switch` },
+        {
+          title: `Clean finished tasks >24h · ${preview.tasks}`,
+          value: "cleanup", disabled: preview.tasks === 0,
+          description: preview.tasks === 0 ? "No eligible done/cancelled tasks; pending tasks are protected" : `${preview.backlogs} backlogs in ${target} · confirmation required`,
+        },
+      ],
+    })
+    if (!choice) return
+    if (choice === "scope") { scope = scope === "global" ? "project" : "global"; continue }
+    if (choice === "details") {
+      await context.ui.dialog.alert({
+        title: "Backlog database · server storage",
+        message: [
+          `Total disk usage (all projects): ${storageSize(stats.totalBytes)}`,
+          `SQLite: ${storageSize(stats.databaseBytes)}`,
+          `WAL (write-ahead log): ${storageSize(stats.walBytes)}`,
+          `SHM (shared-memory index): ${storageSize(stats.shmBytes)}`,
+          `Reusable space inside SQLite: ${storageSize(stats.reusableBytes)}`,
+          "",
+          `All projects: ${stats.totalTasks} tasks / ${stats.totalBacklogs} backlogs`,
+          `This project: ${stats.projectTasks} tasks / ${stats.projectBacklogs} backlogs`,
+          "",
+          `Server path: ${stats.path}`,
+          "",
+          "Cleanup only removes done/cancelled tasks unchanged for more than 24 hours. Legacy tasks receive a fresh 24-hour window on upgrade. Categories, settings, and pending tasks are preserved.",
+        ].join("\n"),
+      })
+      continue
+    }
+    if (!await context.ui.dialog.confirm({
+      title: `Permanently delete ${preview.tasks} finished tasks?`,
+      message: `Delete ${preview.tasks} done/cancelled tasks from ${preview.backlogs} backlogs in ${target}?\n\nOnly tasks last modified before ${new Date(preview.cutoff).toLocaleString()} are included. Pending tasks, categories, and settings are preserved. There is no undo.\n\nSQLite compaction may briefly block writes and needs temporary free disk space up to twice the database size.`,
+      label: { confirm: "Delete and compact", cancel: "Cancel" },
+    })) continue
+    try {
+      const result = await cleanStorage(access, preview)
+      context.ui.toast.show({ message: `Deleted ${result.deletedTasks} finished tasks.${result.compacted ? " Database compacted." : ""}`, variant: "success" })
+      if (result.warning) await context.ui.dialog.alert({ title: "Cleanup complete · compaction deferred", message: result.warning })
+    } catch (cause) {
+      context.ui.toast.show({ message: cause instanceof Error ? cause.message : String(cause), variant: "error" })
+    }
+  }
+}
+
 async function manageSettings(context: Plugin.Context): Promise<void> {
   const access = settingsLocation(context)
   let scope: SettingsScope = "project"
@@ -777,7 +839,7 @@ async function manageSettings(context: Plugin.Context): Promise<void> {
     const current = level.settings
     const scopeName = scope === "global" ? "Global" : "Project"
     const inheritance = level.override ? "Customized here" : scope === "global" ? "Using configured defaults" : "Inherited from global"
-    const choice = await context.ui.dialog.select<"scope" | "detail" | "retention" | "defaultScope" | "reset">({
+    const choice = await context.ui.dialog.select<"scope" | "detail" | "retention" | "defaultScope" | "storage" | "reset">({
       title: `Backlog Settings · ${scope === "global" ? "Global · all projects" : "Project · this project"}`,
       placeholder: scope === "global"
         ? "Defaults for every project unless a project overrides them"
@@ -791,6 +853,7 @@ async function manageSettings(context: Plugin.Context): Promise<void> {
         { title: `Task detail · ${current.taskDetail === "lightweight" ? "Lightweight" : "Detailed"}`, value: "detail", description: level.override ? "Customized here" : "Inherited" },
         { title: `Retention · ${current.retentionDays === 0 ? "Disabled" : `${current.retentionDays} days`}`, value: "retention", description: level.override ? "Customized here" : "Inherited" },
         { title: `Default scope · ${current.defaultMode === "session" ? "Session" : "Project"}`, value: "defaultScope", description: level.override ? "Customized here" : "Inherited" },
+        { title: "Storage · database size and cleanup", value: "storage", description: "Inspect disk usage; manually clean finished tasks older than 24 hours" },
         {
           title: scope === "global" ? "Reset global to configured defaults" : "Reset project to inherit global",
           value: "reset",
@@ -800,6 +863,7 @@ async function manageSettings(context: Plugin.Context): Promise<void> {
     })
     if (!choice) return
     if (choice === "scope") { scope = scope === "global" ? "project" : "global"; continue }
+    if (choice === "storage") { await manageStorage(context, access, scope); continue }
     let next: BacklogSettings | null = { ...current }
     if (choice === "detail") {
       const detail = await chooseTaskDetail(context, current.taskDetail)
@@ -941,7 +1005,7 @@ function Commands(props: { context: Plugin.Context }) {
       {
         id: "kodradev.backlog.settings",
         title: "Backlog Settings",
-        description: "Configure task detail, retention, and default scope for this project",
+        description: "Configure task detail, retention, scope, and database storage",
         group: "Backlog", palette: true,
         slash: { name: "backlog-settings" },
         run: async () => {

@@ -1,9 +1,11 @@
 import { Database } from "bun:sqlite"
-import { mkdirSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { mkdirSync, statSync } from "node:fs"
 import { dirname, isAbsolute, join } from "node:path"
 import { homedir } from "node:os"
 import { EMPTY_BACKLOG, parseBacklog, type Backlog, type BacklogItem, type Category } from "./backlog.js"
 import { DAY_MS, parseBacklogSettings, parseLightweightNotes, type BacklogSettings, type SettingsLevel, type SettingsScope, type SettingsSnapshot, type TaskDetail } from "./settings.js"
+import type { CleanupPreview, CleanupResult, StorageReport, StorageStats } from "./storage.js"
 
 export { parseRetentionDays } from "./settings.js"
 
@@ -75,6 +77,7 @@ export interface StoredSession {
 
 interface CategoryRow { id: string; title: string; color: string | null; icon: string | null }
 interface ItemRow { id: string; title: string; notes: string | null; status: string }
+interface CleanupRow { boardID: string; id: string; updatedAt: number; revision: number }
 
 export function defaultDatabasePath(): string {
   const data = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share")
@@ -116,7 +119,7 @@ export class SessionStore {
       this.db.run("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA wal_autocheckpoint = 1000;")
       this.db.transaction(() => {
         const version = this.db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0
-        if (version > 3) throw new Error(`Unsupported session backlog schema ${version}; upgrade the plugin`)
+        if (version > 4) throw new Error(`Unsupported session backlog schema ${version}; upgrade the plugin`)
         if (version === 0) {
           this.db.run(`
             CREATE TABLE backlogs (
@@ -171,6 +174,15 @@ export class SessionStore {
             );
             PRAGMA user_version = 3;
           `)
+        }
+        if (version < 4) {
+          this.db.run(`
+            ALTER TABLE tasks ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+            CREATE INDEX tasks_cleanup ON tasks(status, updated_at, board_id, id);
+            PRAGMA user_version = 4;
+          `)
+          // Legacy tasks have no individual timestamp; protect them for a full day after upgrade.
+          this.db.query("UPDATE tasks SET updated_at = ?").run(Date.now())
         }
       }).immediate()
     } catch (error) {
@@ -229,6 +241,77 @@ export class SessionStore {
       INSERT INTO session_preferences(session_id, mode, last_accessed_at) VALUES (?, ?, ?)
       ON CONFLICT(session_id) DO UPDATE SET mode = excluded.mode, last_accessed_at = excluded.last_accessed_at
     `).run(sessionID, mode, Date.now())
+  }
+
+  private cleanupRows(projectID: string, scope: SettingsScope, cutoff: number): CleanupRow[] {
+    return this.db.query<CleanupRow, [number, string, string]>(`
+      SELECT t.board_id AS boardID, t.id, t.updated_at AS updatedAt, b.revision
+      FROM tasks t JOIN backlogs b ON b.id = t.board_id
+      WHERE t.status IN ('done', 'cancelled') AND t.updated_at < ?
+        AND (? = 'global' OR b.project_id = ?)
+      ORDER BY t.board_id, t.id
+    `).all(cutoff, scope, projectID)
+  }
+
+  private cleanupPreview(projectID: string, scope: SettingsScope, cutoff: number, rows: CleanupRow[]): CleanupPreview {
+    const fingerprint = createHash("sha256").update(JSON.stringify({ projectID, scope, cutoff, rows })).digest("hex")
+    return { projectID, scope, cutoff, fingerprint, tasks: rows.length, backlogs: new Set(rows.map(({ boardID }) => boardID)).size }
+  }
+
+  private storageStats(projectID: string): StorageStats {
+    const fileBytes = (path: string): number => {
+      try { return statSync(path).size }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0
+        throw error
+      }
+    }
+    const databaseBytes = fileBytes(this.path)
+    const walBytes = fileBytes(`${this.path}-wal`)
+    const shmBytes = fileBytes(`${this.path}-shm`)
+    const free = this.db.query<{ freelist_count: number }, []>("PRAGMA freelist_count").get()?.freelist_count ?? 0
+    const pageSize = this.db.query<{ page_size: number }, []>("PRAGMA page_size").get()?.page_size ?? 4096
+    const counts = this.db.query<{ totalTasks: number; projectTasks: number; totalBacklogs: number; projectBacklogs: number }, [string, string]>(`
+      SELECT (SELECT COUNT(*) FROM tasks) AS totalTasks,
+        (SELECT COUNT(*) FROM tasks t JOIN backlogs b ON b.id = t.board_id WHERE b.project_id = ?) AS projectTasks,
+        (SELECT COUNT(*) FROM backlogs) AS totalBacklogs,
+        (SELECT COUNT(*) FROM backlogs WHERE project_id = ?) AS projectBacklogs
+    `).get(projectID, projectID)!
+    return { path: this.path, databaseBytes, walBytes, shmBytes, totalBytes: databaseBytes + walBytes + shmBytes, reusableBytes: free * pageSize, ...counts }
+  }
+
+  storage(projectID: string, scope: SettingsScope): StorageReport {
+    const cutoff = Date.now() - DAY_MS
+    return this.db.transaction(() => ({
+      stats: this.storageStats(projectID),
+      preview: this.cleanupPreview(projectID, scope, cutoff, this.cleanupRows(projectID, scope, cutoff)),
+    }))()
+  }
+
+  cleanup(projectID: string, scope: SettingsScope, cutoff: number, fingerprint: string): CleanupResult {
+    if (!Number.isSafeInteger(cutoff) || cutoff < 0 || cutoff > Date.now() - DAY_MS) throw new Error("Cleanup must preserve the last 24 hours")
+    const deletedTasks = this.db.transaction(() => {
+      const rows = this.cleanupRows(projectID, scope, cutoff)
+      if (this.cleanupPreview(projectID, scope, cutoff, rows).fingerprint !== fingerprint) {
+        throw new Error("Eligible tasks changed. Refresh Storage and confirm cleanup again. Nothing was deleted.")
+      }
+      const remove = this.db.query("DELETE FROM tasks WHERE board_id = ? AND id = ?")
+      for (const row of rows) remove.run(row.boardID, row.id)
+      const update = this.db.query("UPDATE backlogs SET revision = revision + 1, updated_at = ? WHERE id = ?")
+      const now = Date.now()
+      for (const boardID of new Set(rows.map((row) => row.boardID))) update.run(now, boardID)
+      return rows.length
+    }).immediate()
+    if (deletedTasks === 0) return { deletedTasks, compacted: false }
+    // Reclaim disk space after committing deletion. A busy reader/writer can defer compaction.
+    try {
+      this.db.run("VACUUM")
+      const checkpoint = this.db.query<{ busy: number }, []>("PRAGMA wal_checkpoint(TRUNCATE)").get()
+      if (checkpoint?.busy) return { deletedTasks, compacted: false, warning: "Tasks were deleted, but WAL truncation is busy. Disk space reclamation may be deferred." }
+      return { deletedTasks, compacted: true }
+    } catch (error) {
+      return { deletedTasks, compacted: false, warning: `Tasks were deleted, but disk compaction was deferred: ${error instanceof Error ? error.message : String(error)}` }
+    }
   }
 
   private touch(boardID: string, now = Date.now()): void {
@@ -366,14 +449,16 @@ export class SessionStore {
         if (!taskIDs.has(item.id)) taskDelete.run(scope.boardID, item.id)
       }
       const taskInsert = this.db.query(`
-        INSERT INTO tasks(board_id, id, title, notes, status, position) VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO tasks(board_id, id, title, notes, status, position, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(board_id, id) DO UPDATE SET title = excluded.title, notes = excluded.notes,
-          status = excluded.status, position = excluded.position
+          status = excluded.status, position = excluded.position,
+          updated_at = CASE WHEN tasks.title IS NOT excluded.title OR tasks.notes IS NOT excluded.notes
+            OR tasks.status IS NOT excluded.status THEN excluded.updated_at ELSE tasks.updated_at END
         WHERE tasks.title IS NOT excluded.title OR tasks.notes IS NOT excluded.notes
           OR tasks.status IS NOT excluded.status OR tasks.position IS NOT excluded.position
       `)
       backlog.items.forEach((item, position) => {
-        taskInsert.run(scope.boardID, item.id, item.title, item.notes ?? null, item.status, position)
+        taskInsert.run(scope.boardID, item.id, item.title, item.notes ?? null, item.status, position, now)
       })
       const categoryIDs = new Set(backlog.categories.map(({ id }) => id))
       const categoryDelete = this.db.query("DELETE FROM categories WHERE board_id = ? AND id = ?")

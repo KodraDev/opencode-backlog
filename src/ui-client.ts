@@ -4,6 +4,7 @@ import { parseBacklog, type Backlog } from "./backlog.js"
 import { SessionBacklog } from "./session-rpc.js"
 import type { BacklogPage, PageOptions, Snapshot, StoredSession } from "./session-store.js"
 import type { BacklogSettings, SettingsScope, SettingsSnapshot } from "./settings.js"
+import type { CleanupPreview, CleanupResult, StorageReport } from "./storage.js"
 
 export type SettingsAccess = Pick<BacklogAccess, "client" | "directory">
 
@@ -60,6 +61,15 @@ export async function listSessions(access: BacklogAccess, offset: number): Promi
 
 export async function readSettings(access: SettingsAccess): Promise<SettingsSnapshot> {
   return await access.client.settings({}, { location: { directory: access.directory } }) as SettingsSnapshot
+}
+
+export async function readStorage(access: SettingsAccess, scope: SettingsScope): Promise<StorageReport> {
+  return await access.client.storage({ scope }, { location: { directory: access.directory } }) as StorageReport
+}
+
+export async function cleanStorage(access: SettingsAccess, preview: CleanupPreview): Promise<CleanupResult> {
+  return await access.client.cleanup({ expectedProjectID: preview.projectID, scope: preview.scope, cutoff: preview.cutoff, fingerprint: preview.fingerprint },
+    { location: { directory: access.directory } }) as CleanupResult
 }
 
 export async function saveSettings(access: SettingsAccess, scope: SettingsScope, previous: SettingsSnapshot, settings: BacklogSettings | null): Promise<SettingsSnapshot> {

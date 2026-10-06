@@ -14,6 +14,7 @@ Package: [kodradev-opencode-backlog on npm](https://www.npmjs.com/package/kodrad
 - Live sidebar, task details, notes, and editable categories.
 - Read-only history of stored backlogs in the project.
 - Project settings for task detail, default scope, and automatic retention.
+- Storage statistics and confirmed cleanup of finished tasks unchanged for more than 24 hours.
 - Bundled `kodradev-backlog` skill and workflow reminder; no manual `AGENTS.md` setup needed.
 
 New backlogs start with **Todo**, **Doing**, **Blocked**, and **Done**. Categories can be renamed, styled, reordered, or removed when empty.
@@ -146,7 +147,7 @@ Click a sidebar task or select **Browse selected backlog** in the command palett
 | `/session-backlog-categories` | Manage the selected backlog's categories |
 | `/session-backlog-purge` | Purge a category after confirmation |
 | `/backlog-scope` | Choose this session's scope or restore the configured default |
-| `/backlog-settings` | Configure global or per-project task detail, retention days, and default scope |
+| `/backlog-settings` | Configure global or per-project settings; inspect database storage and clean old finished tasks |
 | `/session-backlogs` | Read-only history of stored backlogs in this project |
 
 Deleting tasks or purging categories requires explicit user authorization.
@@ -168,6 +169,7 @@ Resolution order is **project → global → plugin options**. The plugin's `opt
 - **Retention:** any non-negative whole number of days; `0` disables expiration. Enabling expiration or shortening its window requires confirmation. The new window applies at the next scheduled cleanup, not as an immediate purge.
 - **Default scope:** Session or Project. Only sessions using the configured default change their selected backlog; per-session overrides remain. No tasks are moved or merged.
 - **Reset:** Global resets to the plugin-configured defaults; Project resets to inherit global. Resetting stores no override; it does not delete tasks, notes, or backlogs.
+- **Storage:** Shows server-side database disk usage and offers a separate, confirmed cleanup of old finished tasks. See [manual storage cleanup](#manual-storage-cleanup).
 
 A project override is a complete snapshot of the three values: changing one field at the project scope stores the inherited values for the other fields too, so later changes to those fields at the global scope no longer reach that project until its override is reset. Reset the project to resume inheritance. Changing plugin `options` requires a plugin reload; dialog changes take effect without reloading.
 
@@ -220,6 +222,19 @@ Set an absolute `databasePath` in plugin options to use another location. The TU
 
 Existing upstream `BACKLOG.json` files are not imported or modified.
 
+### Manual Storage Cleanup
+
+Open `/backlog-settings` → **Storage · database size and cleanup**. Disk usage always covers the entire plugin database, not just the selected project or task text: SQLite, its write-ahead log (`-wal`), and shared-memory index (`-shm`). Select **Disk usage** for the breakdown, reusable SQLite space, task/backlog counts for the database and current project, and the database path on the server. Remote clients read these statistics through RPC.
+
+The cleanup scope initially matches the Settings scope. Switch **Cleanup scope** inside Storage to choose **Project** (all session and shared backlogs in this project) or **Global** (every project stored in this database). This selection does not change settings or the session's selected backlog.
+
+- **Clean finished tasks >24h** previews the number of eligible tasks and affected backlogs. The action is disabled when none qualify.
+- Only category IDs `done` and `cancelled` qualify, and only when their individual last modification is strictly older than 24 hours. Creating a task or changing its title, notes, or status resets its timestamp; reordering tasks does not. Reading a task does not reset it.
+- Existing tasks without individual timestamps receive a fresh 24-hour window when upgrading to schema version 4; they are not immediately eligible for manual cleanup.
+- Confirmation states the count, project/global scope, exact cutoff, and permanent nature of deletion. Pending tasks (including custom categories), categories, backlog records, scope preferences, and settings are preserved. This is a manual action, separate from automatic retention; there is no undo.
+- Cleanup captures its scope and cutoff and checks eligible tasks and affected backlog revisions inside the deletion transaction. Concurrent changes reject a stale confirmation without deleting anything; refresh and confirm again. Affected backlog revisions advance, preventing stale edit dialogs from restoring removed tasks.
+- After deletion, cleanup attempts `VACUUM` and a WAL truncation checkpoint, then refreshes the displayed size. Compaction is database-wide even for project cleanup, but it does not delete tasks outside the selected scope. It can briefly block writes and needs temporary free disk space up to twice the database size. If compaction is busy or fails, deletion remains committed and the UI reports deferred reclamation rather than claiming that disk space was recovered.
+
 ### Automatic Retention
 
 Automatic expiration is enabled by default with a global `retentionDays` of `90`. Change it in **Backlog Settings** globally or per project, or set the initial global default in the plugin's `options`, for example:
@@ -237,12 +252,12 @@ Set `retentionDays` to `0` to keep all backlog data indefinitely. Values must be
 - **Project backlogs and any backlog with pending tasks are never automatically deleted.** Custom category IDs other than `done`/`cancelled`, including Blocked, Review, and Waiting, count as pending.
 - Reading or editing a backlog refreshes its inactivity window. Resolving a session's scope also refreshes its selected backlog and scope preference. Access writes are throttled to once per hour, with an extra hour of retention to protect recent reads. Merely listing stored backlogs does not refresh every entry.
 - Unused session scope overrides expire after the same inactivity period, but only when their isolated backlog no longer exists. Legacy overrides whose project cannot be identified are retained until the session is accessed again.
-- Existing data receives a fresh inactivity window when upgrading from the original schema without access timestamps; old history is not immediately deleted. The current schema version 3 is not readable by older plugin releases; back up the database before upgrading if you need a downgrade path.
+- Existing data receives a fresh inactivity window when upgrading from the original schema without access timestamps; old history is not immediately deleted. The current schema version 4 is not readable by older plugin releases; back up the database before upgrading if you need a downgrade path.
 - Maintenance runs when the plugin loads and every 24 hours while it remains loaded. Cleanup is limited to 100 eligible backlogs and 1,000 unused overrides per project per day. Multiple instances sharing the database coordinate through SQLite; keep retention options consistent for the same project. Unloaded projects are cleaned when their plugin next loads.
 
 Deleted pages are reusable by SQLite. Database-wide maintenance runs at most once per day and performs `VACUUM` when at least 4 MiB and 25% of database pages are free, then attempts a WAL truncation checkpoint. Smaller free allocations remain available for reuse. Readers or competing writers can defer reclamation; maintenance failures are logged without disabling backlog tools. `VACUUM` can briefly block writes and requires temporary free disk space of up to twice the database size.
 
-Retention reduces accumulated finished session history, **not total disk usage to a fixed cap**: protected backlogs can still grow, and a large expired history may take multiple daily batches to clear. WAL checkpoints alone do not delete tasks or compact database pages. Explicit export, archival, disk statistics, and manual maintenance commands remain future work.
+Retention reduces accumulated finished session history, **not total disk usage to a fixed cap**: protected backlogs can still grow, and a large expired history may take multiple daily batches to clear. WAL checkpoints alone do not delete tasks or compact database pages. Storage statistics and manual finished-task cleanup are available in Settings; export and archival remain future work.
 
 ## Development
 
